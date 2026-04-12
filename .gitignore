@@ -46,3 +46,8 @@ Thumbs.db
 
 # Local data
 rpi/data/
+
+# Web
+web/node_modules/
+web/dist/
+web/.env.local

@@ -12,15 +12,16 @@ Voordat je iets doet: verifieer de MCP verbinding en het juiste project.
 
 ## Project identifiers
 ```
-Supabase project ref:  [VUL_IN_NA_AANMAKEN]
-Supabase project URL:  https://[VUL_IN].supabase.co
+Supabase project ref:  kacbiyxnyfvsdkhddodl
+Supabase project URL:  https://kacbiyxnyfvsdkhddodl.supabase.co
+MCP server name:       supabase-sour (NIET de default `supabase`)
 Vercel project:        [VUL_IN_NA_EERSTE_DEPLOY]
 Lokale repo:           ~/projects/sourdough-research
 Knowledge vault:       ~/knowledge-vault/sour/
 ```
 
 ## Supabase MCP — regels
-- Gebruik ALTIJD `mcp__supabase__execute_sql` voor DB queries
+- Gebruik ALTIJD `mcp__supabase-sour__execute_sql` voor DB queries (NIET `mcp__supabase__...`)
 - Gebruik NOOIT Supabase CLI, psql, of lokale containers
 - Gebruik NOOIT een andere project ref dan hierboven
 - Bij twijfel over welk project: STOP en vraag
