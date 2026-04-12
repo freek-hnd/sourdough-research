@@ -99,10 +99,16 @@ export function useCreateBatch() {
 
       const now = new Date();
       const { generateShortId } = await import("@/lib/utils");
+      const prefix = generateShortId(input.type, now, 0).slice(0, 6); // e.g. "D0412-"
+      const { data: existing } = await supabase
+        .from("items")
+        .select("short_id")
+        .like("short_id", `${prefix}%`);
+      const offset = existing?.length ?? 0;
       const itemsPayload = input.children.map((c, i) => ({
         batch_id: batch.id,
         type: input.type,
-        short_id: generateShortId(input.type, now, i),
+        short_id: generateShortId(input.type, now, offset + i),
         container_type: c.container_type,
         weight_g: c.weight_g,
         station_id: c.station_id,
