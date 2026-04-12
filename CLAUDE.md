@@ -15,7 +15,9 @@ Voordat je iets doet: verifieer de MCP verbinding en het juiste project.
 Supabase project ref:  kacbiyxnyfvsdkhddodl
 Supabase project URL:  https://kacbiyxnyfvsdkhddodl.supabase.co
 MCP server name:       supabase-sour (NIET de default `supabase`)
-Vercel project:        [VUL_IN_NA_EERSTE_DEPLOY]
+Vercel project:        sour (team: freek-hnds-projects)
+Vercel URL:            https://sour-five.vercel.app
+GitHub repo:           https://github.com/freek-hnd/sourdough-research
 Lokale repo:           ~/projects/sourdough-research
 Knowledge vault:       ~/knowledge-vault/sour/
 ```
