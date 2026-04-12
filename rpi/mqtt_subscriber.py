@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 
-from . import db
+import db
 
 log = logging.getLogger(__name__)
 

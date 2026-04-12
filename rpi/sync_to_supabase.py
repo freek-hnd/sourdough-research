@@ -16,7 +16,8 @@ from typing import Any
 
 import requests
 
-from . import config, db
+import config
+import db
 
 log = logging.getLogger(__name__)
 
