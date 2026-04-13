@@ -62,6 +62,9 @@ export function ItemDetailPage() {
             {item.station_id && <Badge>Station {item.station_id}</Badge>}
           </div>
         </div>
+        {item.batch?.root_starter && (
+          <p className="text-sm text-muted-foreground">{item.batch.root_starter.name}</p>
+        )}
         {session && (
           <p className="text-sm text-muted-foreground">Running for {formatElapsed(session.started_at)}</p>
         )}

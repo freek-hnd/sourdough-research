@@ -136,7 +136,11 @@ export interface Photo {
   caption: string | null;
 }
 
+export interface BatchWithStarter extends Batch {
+  root_starter: RootStarter | null;
+}
+
 export interface ItemWithJoins extends Item {
-  batch: Batch | null;
+  batch: BatchWithStarter | null;
   station: Station | null;
 }
