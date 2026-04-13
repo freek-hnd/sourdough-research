@@ -160,7 +160,11 @@ export function BatchNewPage() {
         <div className="space-y-2">
           <Label>Root starter</Label>
           <Select value={rootStarterId} onValueChange={(v) => setRootStarterId(v ?? "")}>
-            <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+            <SelectTrigger>
+              <SelectValue placeholder="Select...">
+                {starters.find((s) => s.id === rootStarterId)?.name ?? "Select..."}
+              </SelectValue>
+            </SelectTrigger>
             <SelectContent>
               {starters.map((s) => (
                 <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
@@ -173,26 +177,37 @@ export function BatchNewPage() {
           <div className="space-y-1"><Label>Water (g)</Label><Input inputMode="numeric" value={water} onChange={(e) => setWater(e.target.value)} /></div>
           <div className="space-y-1"><Label>Starter (g)</Label><Input inputMode="numeric" value={starterG} onChange={(e) => setStarterG(e.target.value)} /></div>
         </div>
-        <div className="space-y-1">
-          <Label>Container</Label>
-          <Select value={containerType} onValueChange={(v) => setContainerType(v ?? "jar-starter")}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="jar-starter">Jar (starter)</SelectItem>
-              <SelectItem value="other">Other</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label>Station</Label>
-          <Select value={stationId?.toString() ?? ""} onValueChange={(v) => setStationId(v ? Number(v) : null)}>
-            <SelectTrigger><SelectValue placeholder="No station" /></SelectTrigger>
-            <SelectContent>
-              {stations.map((s) => (
-                <SelectItem key={s.id} value={s.id.toString()}>#{s.id} {s.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <Label>Container</Label>
+            <Select value={containerType} onValueChange={(v) => setContainerType(v ?? "jar-starter")}>
+              <SelectTrigger>
+                <SelectValue>
+                  {containerType === "jar-starter" ? "Jar (starter)" : containerType === "jar-large" ? "Jar (large)" : containerType === "other" ? "Other" : containerType}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="jar-starter">Jar (starter)</SelectItem>
+                <SelectItem value="jar-large">Jar (large)</SelectItem>
+                <SelectItem value="other">Other</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label>Station</Label>
+            <Select value={stationId?.toString() ?? ""} onValueChange={(v) => setStationId(v ? Number(v) : null)}>
+              <SelectTrigger>
+                <SelectValue placeholder="No station">
+                  {stationId ? `#${stationId} ${stations.find((s) => s.id === stationId)?.label ?? ""}` : "No station"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {stations.map((s) => (
+                  <SelectItem key={s.id} value={s.id.toString()}>#{s.id} {s.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
         <Button
           className="h-12 w-full"
@@ -256,7 +271,11 @@ export function BatchNewPage() {
           <div className="space-y-1">
             <Label>Parent starter</Label>
             <Select value={rootStarterId} onValueChange={(v) => setRootStarterId(v ?? "")}>
-              <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue placeholder="Select...">
+                  {starters.find((s) => s.id === rootStarterId)?.name ?? "Select..."}
+                </SelectValue>
+              </SelectTrigger>
               <SelectContent>
                 {starters.map((s) => (
                   <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
@@ -271,7 +290,11 @@ export function BatchNewPage() {
           <div className="space-y-1">
             <Label>Container</Label>
             <Select value={containerType} onValueChange={(v) => setContainerType(v ?? "default")}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue>
+                  {containerType === "banneton" ? "Banneton" : containerType === "bowl" ? "Bowl" : "Default"}
+                </SelectValue>
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="default">Default</SelectItem>
                 <SelectItem value="banneton">Banneton</SelectItem>
@@ -364,7 +387,11 @@ export function BatchNewPage() {
                         setChildren(next);
                       }}
                     >
-                      <SelectTrigger><SelectValue placeholder="No station" /></SelectTrigger>
+                      <SelectTrigger>
+                        <SelectValue placeholder="No station">
+                          {c.station_id ? `#${c.station_id}` : "No station"}
+                        </SelectValue>
+                      </SelectTrigger>
                       <SelectContent>
                         {stations.map((s) => (
                           <SelectItem key={s.id} value={s.id.toString()}>#{s.id}</SelectItem>
@@ -379,7 +406,11 @@ export function BatchNewPage() {
                         setChildren(next);
                       }}
                     >
-                      <SelectTrigger><SelectValue placeholder="Probe —" /></SelectTrigger>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Probe —">
+                          {c.inkbird_probe ? `Probe ${c.inkbird_probe}` : "Probe —"}
+                        </SelectValue>
+                      </SelectTrigger>
                       <SelectContent>
                         {[1, 2, 3, 4].map((n) => (
                           <SelectItem key={n} value={n.toString()}>Probe {n}</SelectItem>
