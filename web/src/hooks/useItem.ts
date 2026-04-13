@@ -8,7 +8,7 @@ export function useItem(shortId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("items")
-        .select("*, batch:batches(*, root_starter:root_starters(*)), station:stations(*)")
+        .select("*, batch:batches!items_batch_id_fkey(*, root_starter:root_starters(*)), station:stations(*)")
         .eq("short_id", shortId!)
         .maybeSingle();
       if (error) throw error;

@@ -15,7 +15,7 @@ export function useActiveItems() {
       // Fetch items that have NO outcome yet (still active)
       const { data: items, error } = await supabase
         .from("items")
-        .select("*, batch:batches(*, root_starter:root_starters(*)), station:stations(*)")
+        .select("*, batch:batches!items_batch_id_fkey(*, root_starter:root_starters(*)), station:stations(*)")
         .order("created_at", { ascending: false })
         .limit(50);
       if (error) throw error;
