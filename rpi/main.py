@@ -24,13 +24,13 @@ from mqtt_subscriber import MqttSubscriber
 log = logging.getLogger(__name__)
 
 
-def _sync_loop(conn, stop: threading.Event) -> None:
+def _sync_loop(stop: threading.Event) -> None:
     log.info("sync_loop started (interval=%ss, enabled=%s)",
              config.SYNC_INTERVAL_SEC, config.sync_enabled())
     while not stop.is_set():
         if config.sync_enabled():
             try:
-                results = sync_to_supabase.sync_all(conn)
+                results = sync_to_supabase.sync_all()
                 log.info("sync ok: %s", results)
             except Exception:
                 log.exception("sync failed")
@@ -65,7 +65,7 @@ def main() -> int:
         _spawn(local_sensors.run, "local_sensors", conn, stop),
         _spawn(inkbird_reader.run, "inkbird", conn, stop),
         _spawn(hanna_manager.run, "hanna", conn, stop),
-        _spawn(_sync_loop, "sync", conn, stop),
+        _spawn(_sync_loop, "sync", stop),
     ]
 
     def _shutdown(signum, _frame):
