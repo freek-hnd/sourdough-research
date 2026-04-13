@@ -54,7 +54,7 @@ def main() -> int:
 
     # Init DB schema once from main thread, then close — each worker opens
     # its own connection (SQLite objects can't cross threads).
-    init_conn = db.init_db(config.DB_PATH)
+    init_conn = db.init_db(config.DB_PATH, station_id=config.STATION_ID)
     init_conn.close()
 
     stop = threading.Event()

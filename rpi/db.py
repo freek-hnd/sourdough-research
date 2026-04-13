@@ -181,9 +181,14 @@ CREATE INDEX IF NOT EXISTS idx_items_batch ON items (batch_id);
 """
 
 
-def init_db(db_path: str | Path) -> sqlite3.Connection:
+def init_db(db_path: str | Path, station_id: int = 1) -> sqlite3.Connection:
     conn = connect(db_path)
     conn.executescript(SCHEMA)
+    # Ensure this station exists so FK constraints on measurements etc. pass.
+    conn.execute(
+        "INSERT OR IGNORE INTO stations (id, label, device_type) VALUES (?, ?, ?)",
+        (station_id, f"station-{station_id}", "rpi"),
+    )
     return conn
 
 
