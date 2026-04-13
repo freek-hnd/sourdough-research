@@ -54,23 +54,30 @@ def sync_table(conn: sqlite3.Connection, table: str, batch_size: int) -> int:
     return len(local_rows)
 
 
-def sync_all(conn: sqlite3.Connection) -> dict[str, int]:
-    """Sync every registered table once. Logs per-table failures, never raises."""
+def sync_all() -> dict[str, int]:
+    """Sync every registered table once. Logs per-table failures, never raises.
+
+    Opens its own SQLite connection so it can safely run in any thread.
+    """
     if not config.sync_enabled():
         log.info("sync disabled (SUPABASE_URL/KEY not set)")
         return {}
 
-    results: dict[str, int] = {}
-    for table in db.SYNC_TABLES:
-        try:
-            n = sync_table(conn, table, config.SYNC_BATCH_SIZE)
-            results[table] = n
-            if n:
-                log.info("synced %d rows -> %s", n, table)
-        except requests.HTTPError as e:
-            log.error("sync %s HTTP %s: %s", table, e.response.status_code, e.response.text[:300])
-        except requests.RequestException as e:
-            log.error("sync %s network error: %s", table, e)
-        except Exception:
-            log.exception("sync %s unexpected error", table)
-    return results
+    conn = db.connect(config.DB_PATH)
+    try:
+        results: dict[str, int] = {}
+        for table in db.SYNC_TABLES:
+            try:
+                n = sync_table(conn, table, config.SYNC_BATCH_SIZE)
+                results[table] = n
+                if n:
+                    log.info("synced %d rows -> %s", n, table)
+            except requests.HTTPError as e:
+                log.error("sync %s HTTP %s: %s", table, e.response.status_code, e.response.text[:300])
+            except requests.RequestException as e:
+                log.error("sync %s network error: %s", table, e)
+            except Exception:
+                log.exception("sync %s unexpected error", table)
+        return results
+    finally:
+        conn.close()
