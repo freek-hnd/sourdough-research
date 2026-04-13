@@ -32,6 +32,22 @@ export function useLogEvent() {
   });
 }
 
+export function useDeleteEvent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (eventId: string) => {
+      const { error } = await supabase
+        .from("events")
+        .delete()
+        .eq("id", eventId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["events"] });
+    },
+  });
+}
+
 export function useEndSession() {
   const qc = useQueryClient();
   return useMutation({

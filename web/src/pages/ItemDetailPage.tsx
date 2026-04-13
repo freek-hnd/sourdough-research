@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -19,8 +19,9 @@ import {
   useItemEvents,
   useLatestMeasurement,
 } from "@/hooks/useItem";
-import { useLogEvent } from "@/hooks/useMutations";
+import { useLogEvent, useDeleteEvent } from "@/hooks/useMutations";
 import { formatElapsed, formatTime } from "@/lib/utils";
+import { Trash2 } from "lucide-react";
 
 const QUICK_ACTIONS = [
   { name: "stretch_fold", label: "🤲 Fold" },
@@ -39,8 +40,10 @@ export function ItemDetailPage() {
   const { data: measurement } = useLatestMeasurement(item?.station_id);
   const { data: events } = useItemEvents(item?.id);
   const logEvent = useLogEvent();
+  const deleteEvent = useDeleteEvent();
   const [note, setNote] = useState("");
   const [sheetOpen, setSheetOpen] = useState(false);
+  const undoTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   if (isLoading || !item) return <div className="p-4"><Skeleton className="h-32 w-full" /></div>;
 
@@ -51,8 +54,34 @@ export function ItemDetailPage() {
     if (!item) return;
     logEvent.mutate(
       { event_name: name, session_id: session?.id ?? null, station_id: item.station_id ?? null },
-      { onSuccess: () => toast.success(name) },
+      {
+        onSuccess: (data) => {
+          const eventId = data.id;
+          const toastId = toast.success(name, {
+            action: {
+              label: "Undo",
+              onClick: () => {
+                const timer = undoTimers.current.get(eventId);
+                if (timer) clearTimeout(timer);
+                undoTimers.current.delete(eventId);
+                deleteEvent.mutate(eventId);
+                toast.dismiss(toastId);
+              },
+            },
+            duration: 5000,
+          });
+          const timer = setTimeout(() => undoTimers.current.delete(eventId), 5000);
+          undoTimers.current.set(eventId, timer);
+        },
+      },
     );
+  }
+
+  function handleDeleteEvent(eventId: string, name: string) {
+    deleteEvent.mutate(eventId, {
+      onSuccess: () => toast.success(`Deleted: ${name}`),
+      onError: (err) => toast.error((err as Error).message),
+    });
   }
 
   return (
@@ -106,8 +135,18 @@ export function ItemDetailPage() {
                   logEvent.mutate(
                     { event_name: "note", notes: note, session_id: session?.id ?? null, station_id: item.station_id ?? null },
                     {
-                      onSuccess: () => {
-                        toast.success("Note saved");
+                      onSuccess: (data) => {
+                        const eventId = data.id;
+                        const toastId = toast.success("Note saved", {
+                          action: {
+                            label: "Undo",
+                            onClick: () => {
+                              deleteEvent.mutate(eventId);
+                              toast.dismiss(toastId);
+                            },
+                          },
+                          duration: 5000,
+                        });
                         setNote("");
                         setSheetOpen(false);
                       },
@@ -126,11 +165,17 @@ export function ItemDetailPage() {
           {(events ?? []).map((e) => (
             <div
               key={e.id}
-              className="flex gap-3 rounded-lg border border-border bg-card px-3 py-2"
+              className="group flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2"
             >
               <span className="w-14 shrink-0 text-muted-foreground">{formatTime(e.occurred_at)}</span>
               <span className="flex-1">{e.event_name}</span>
-              {e.notes && <span className="text-muted-foreground truncate max-w-[40%]">{e.notes}</span>}
+              {e.notes && <span className="text-muted-foreground truncate max-w-[30%]">{e.notes}</span>}
+              <button
+                className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                onClick={() => handleDeleteEvent(e.id, e.event_name)}
+              >
+                <Trash2 className="size-3.5" />
+              </button>
             </div>
           ))}
           {(!events || events.length === 0) && (
