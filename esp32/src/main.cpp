@@ -3,6 +3,11 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <Wire.h>
+#include <SensirionI2cScd4x.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <SparkFun_VL53L5CX_Library.h>
 
 #ifndef STATION_ID
 #define STATION_ID 2
@@ -10,6 +15,11 @@
 #ifndef INTERVAL_SEC
 #define INTERVAL_SEC 300
 #endif
+
+// --- Pin config --------------------------------------------------------------
+#define I2C_SDA 21
+#define I2C_SCL 22
+#define ONE_WIRE_BUS 4
 
 static const char* WIFI_SSID   = "CHANGE_ME";
 static const char* WIFI_PASS   = "CHANGE_ME";
@@ -32,7 +42,34 @@ char clientId[32];
 uint32_t lastHeartbeatMs = 0;
 time_t   lastMeasurementEpoch = 0;
 
-// --- Sensor stubs ---------------------------------------------------------
+// --- Sensor globals ----------------------------------------------------------
+
+// SCD4x (CO2, temperature, humidity)
+#ifdef NO_ERROR
+#undef NO_ERROR
+#endif
+#define NO_ERROR 0
+
+SensirionI2cScd4x scd4x;
+static char scdErrorMsg[64];
+static int16_t scdError;
+static uint16_t latestCO2 = 0;
+static float latestScdTempC = NAN;
+static float latestScdHumidity = NAN;
+static bool scdInitOk = false;
+
+// DS18B20 (probe temperature)
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature probeSensor(&oneWire);
+static bool dsInitOk = false;
+
+// VL53L5CX (8x8 ToF distance)
+SparkFun_VL53L5CX tof;
+VL53L5CX_ResultsData tofData;
+static bool tofInitOk = false;
+static bool tofHasData = false;
+
+// --- Data sample struct ------------------------------------------------------
 struct SensorSample {
   bool  haveToF = false;
   float tofMedianMm = 0, tofMinMm = 0, tofMaxMm = 0;
@@ -51,13 +88,188 @@ struct SensorSample {
   float loadCellG = 0;
 };
 
-static void readToF(SensorSample&)      { /* TODO: VL53L5CX */ }
-static void readSCD41(SensorSample&)    { /* TODO: SCD41 I2C */ }
-static void readDS18B20(SensorSample&)  { /* TODO: OneWire */ }
+// --- Helpers -----------------------------------------------------------------
+
+static void sortUint16(uint16_t arr[], int n) {
+  for (int i = 0; i < n - 1; i++) {
+    for (int j = i + 1; j < n; j++) {
+      if (arr[j] < arr[i]) {
+        uint16_t tmp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = tmp;
+      }
+    }
+  }
+}
+
+static uint16_t computeMedianDistance(VL53L5CX_ResultsData* data) {
+  uint16_t vals[64];
+  int count = 0;
+  for (int i = 0; i < 64; i++) {
+    uint16_t d = data->distance_mm[i];
+    if (d > 0 && d < 4000) {
+      vals[count++] = d;
+    }
+  }
+  if (count == 0) return 0;
+  sortUint16(vals, count);
+  if (count % 2 == 1) return vals[count / 2];
+  return (vals[count / 2 - 1] + vals[count / 2]) / 2;
+}
+
+// --- Sensor init (called once in setup) --------------------------------------
+
+static void initSCD4x() {
+  scd4x.begin(Wire, SCD41_I2C_ADDR_62);
+  delay(30);
+
+  scdError = scd4x.wakeUp();
+  if (scdError != NO_ERROR) {
+    errorToString(scdError, scdErrorMsg, sizeof(scdErrorMsg));
+    Serial.printf("[scd4x] wakeUp error: %s\n", scdErrorMsg);
+  }
+
+  scdError = scd4x.stopPeriodicMeasurement();
+  if (scdError != NO_ERROR) {
+    errorToString(scdError, scdErrorMsg, sizeof(scdErrorMsg));
+    Serial.printf("[scd4x] stopPeriodicMeasurement error: %s\n", scdErrorMsg);
+  }
+
+  scdError = scd4x.reinit();
+  if (scdError != NO_ERROR) {
+    errorToString(scdError, scdErrorMsg, sizeof(scdErrorMsg));
+    Serial.printf("[scd4x] reinit error: %s\n", scdErrorMsg);
+    return;
+  }
+
+  uint64_t serialNumber = 0;
+  scdError = scd4x.getSerialNumber(serialNumber);
+  if (scdError != NO_ERROR) {
+    errorToString(scdError, scdErrorMsg, sizeof(scdErrorMsg));
+    Serial.printf("[scd4x] getSerialNumber error: %s\n", scdErrorMsg);
+    return;
+  }
+  Serial.printf("[scd4x] serial=0x%08lX%08lX\n",
+    (uint32_t)(serialNumber >> 32), (uint32_t)(serialNumber & 0xFFFFFFFF));
+
+  scdError = scd4x.startPeriodicMeasurement();
+  if (scdError != NO_ERROR) {
+    errorToString(scdError, scdErrorMsg, sizeof(scdErrorMsg));
+    Serial.printf("[scd4x] startPeriodicMeasurement error: %s\n", scdErrorMsg);
+    return;
+  }
+
+  scdInitOk = true;
+  Serial.println("[scd4x] ok");
+}
+
+static void initDS18B20() {
+  probeSensor.begin();
+  dsInitOk = true;
+  Serial.println("[ds18b20] ok");
+}
+
+static void initToF() {
+  if (!tof.begin()) {
+    Serial.println("[vl53l5cx] not found on I2C");
+    return;
+  }
+
+  tof.setResolution(8 * 8);
+  tof.setRangingFrequency(5);
+
+  if (!tof.startRanging()) {
+    Serial.println("[vl53l5cx] failed to start ranging");
+    return;
+  }
+
+  tofInitOk = true;
+  Serial.println("[vl53l5cx] ok (8x8 @ 5Hz)");
+}
+
+// --- Sensor reads (called on each measurement tick) --------------------------
+
+static void readSCD41(SensorSample& s) {
+  if (!scdInitOk) return;
+
+  // Poll for ready data (SCD4x measures every ~5s internally)
+  bool dataReady = false;
+  scdError = scd4x.getDataReadyStatus(dataReady);
+  if (scdError != NO_ERROR || !dataReady) return;
+
+  uint16_t co2 = 0;
+  float temp = 0.0f;
+  float rh = 0.0f;
+  scdError = scd4x.readMeasurement(co2, temp, rh);
+  if (scdError != NO_ERROR) {
+    errorToString(scdError, scdErrorMsg, sizeof(scdErrorMsg));
+    Serial.printf("[scd4x] readMeasurement error: %s\n", scdErrorMsg);
+    return;
+  }
+
+  // Cache latest values
+  latestCO2 = co2;
+  latestScdTempC = temp;
+  latestScdHumidity = rh;
+
+  s.haveSCD = true;
+  s.co2Ppm = (float)co2;
+  s.scdTempC = temp;
+  s.scdHumidityPct = rh;
+}
+
+static void readDS18B20(SensorSample& s) {
+  if (!dsInitOk) return;
+
+  probeSensor.requestTemperatures();
+  float t = probeSensor.getTempCByIndex(0);
+
+  if (t == DEVICE_DISCONNECTED_C || t < -50.0f || t > 125.0f) {
+    Serial.println("[ds18b20] disconnected or out of range");
+    return;
+  }
+
+  s.haveDS = true;
+  s.ds18b20TempC = t;
+}
+
+static void readToF(SensorSample& s) {
+  if (!tofInitOk) return;
+
+  if (!tof.isDataReady()) return;
+
+  if (!tof.getRangingData(&tofData)) {
+    Serial.println("[vl53l5cx] getRangingData failed");
+    return;
+  }
+
+  tofHasData = true;
+  uint16_t medianMm = computeMedianDistance(&tofData);
+
+  // Compute min and max from valid distances
+  uint16_t minMm = 0xFFFF, maxMm = 0;
+  for (int i = 0; i < 64; i++) {
+    uint16_t d = tofData.distance_mm[i];
+    if (d > 0 && d < 4000) {
+      if (d < minMm) minMm = d;
+      if (d > maxMm) maxMm = d;
+    }
+  }
+  if (minMm == 0xFFFF) minMm = 0;
+
+  s.haveToF = true;
+  s.tofMedianMm = (float)medianMm;
+  s.tofMinMm = (float)minMm;
+  s.tofMaxMm = (float)maxMm;
+  for (int i = 0; i < 64; i++) {
+    s.tofGrid[i] = (int)tofData.distance_mm[i];
+  }
+}
+
 static void readIR(SensorSample&)       { /* TODO: MLX90614 */ }
 static void readLoadCell(SensorSample&) { /* TODO: HX711 */ }
 
-// --- Networking -----------------------------------------------------------
+// --- Networking --------------------------------------------------------------
 static void connectWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -96,14 +308,14 @@ static void connectMqtt() {
   }
 }
 
-// --- ISO8601 UTC ----------------------------------------------------------
+// --- ISO8601 UTC -------------------------------------------------------------
 static void formatIso8601(time_t t, char* out, size_t n) {
   struct tm tm_utc;
   gmtime_r(&t, &tm_utc);
   strftime(out, n, "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
 }
 
-// --- Publishers -----------------------------------------------------------
+// --- Publishers --------------------------------------------------------------
 static void publishMeasurement(time_t alignedEpoch) {
   SensorSample s;
   readToF(s); readSCD41(s); readDS18B20(s); readIR(s); readLoadCell(s);
@@ -145,7 +357,7 @@ static void publishHeartbeat() {
   mqtt.publish(statusTopic, (const uint8_t*)buf, n, true);
 }
 
-// --- Setup / Loop ---------------------------------------------------------
+// --- Setup / Loop ------------------------------------------------------------
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -155,9 +367,19 @@ void setup() {
   snprintf(statusTopic, sizeof(statusTopic),
            "sourdough/station/%d/status", STATION_ID);
 
+  // I2C bus — must init before SCD4x and VL53L5CX
+  Wire.begin(I2C_SDA, I2C_SCL);
+
+  // Init sensors in order (matches working reference firmware)
+  initSCD4x();
+  initDS18B20();
+  initToF();
+
   connectWifi();
   syncTime();
   connectMqtt();
+
+  Serial.println("[setup] complete");
 }
 
 void loop() {
