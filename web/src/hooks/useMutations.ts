@@ -123,12 +123,16 @@ export function useCreateBatch() {
       const sessionsPayload = (items ?? [])
         .filter((it) => it.station_id != null)
         .map((it) => ({
+          id: crypto.randomUUID(),
           item_id: it.id,
           station_id: it.station_id!,
           started_at: input.mixed_at,
         }));
       if (sessionsPayload.length > 0) {
-        const { error: sErr } = await supabase.from("sessions").insert(sessionsPayload);
+        const { error: sErr } = await supabase
+          .from("sessions")
+          .insert(sessionsPayload)
+          .select();
         if (sErr) throw sErr;
       }
       return { batch, items };
