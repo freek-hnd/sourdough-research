@@ -37,8 +37,25 @@ def _wait_until_next_aligned(interval: int, stop: threading.Event) -> float | No
     return next_tick
 
 
+def _init_i2c_bus():
+    """Initialize the I2C bus — must be called BEFORE any I2C sensor init.
+
+    The VL53L5CX ctypes driver requires the bus to be set up via
+    busio.I2C first, otherwise it segfaults.
+    """
+    import board
+    import busio
+
+    i2c = busio.I2C(board.SCL, board.SDA)
+    log.info("I2C bus initialized")
+    return i2c
+
+
 def _init_scd41():
-    """Initialize the SCD41 CO2/temp/humidity sensor over I2C."""
+    """Initialize the SCD41 CO2/temp/humidity sensor over I2C.
+
+    Must be called AFTER _init_i2c_bus() and BEFORE _init_tof().
+    """
     from sensirion_i2c_driver import I2cConnection
     from sensirion_i2c_driver.linux_i2c_transceiver import LinuxI2cTransceiver
     from sensirion_i2c_scd.scd4x.device import Scd4xI2cDevice
@@ -58,7 +75,10 @@ def _init_scd41():
 
 
 def _init_tof():
-    """Initialize the VL53L5CX 8x8 Time-of-Flight sensor."""
+    """Initialize the VL53L5CX 8x8 Time-of-Flight sensor.
+
+    Must be called AFTER _init_i2c_bus() and _init_scd41().
+    """
     import vl53l5cx_ctypes
 
     tof = vl53l5cx_ctypes.VL53L5CX()
@@ -148,19 +168,31 @@ def run(stop: threading.Event) -> None:
 
     conn = db.connect(config.DB_PATH)
 
-    # Initialize sensors
+    # Initialize sensors in strict order matching the working old logger:
+    # 1. I2C bus first (required by VL53L5CX ctypes driver)
+    # 2. SCD41 (stop + sleep + start periodic measurement)
+    # 3. VL53L5CX ToF (only after I2C bus and SCD41 are ready)
+    i2c = None
     scd41 = None
     tof = None
+
+    try:
+        i2c = _init_i2c_bus()
+    except Exception:
+        log.exception("I2C bus init failed — ToF will not work")
 
     try:
         scd41 = _init_scd41()
     except Exception:
         log.exception("SCD41 init failed — will retry reads but expect None values")
 
-    try:
-        tof = _init_tof()
-    except Exception:
-        log.exception("VL53L5CX init failed — will retry reads but expect None values")
+    if i2c is not None:
+        try:
+            tof = _init_tof()
+        except Exception:
+            log.exception("VL53L5CX init failed — will retry reads but expect None values")
+    else:
+        log.warning("Skipping VL53L5CX init — I2C bus not available")
 
     # Warm-up period
     log.info("Warming up sensors for %ds...", STARTUP_WARMUP_SECONDS)
