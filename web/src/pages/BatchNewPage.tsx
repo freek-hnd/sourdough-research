@@ -76,6 +76,7 @@ export function BatchNewPage() {
             className="cursor-pointer hover:bg-accent/50"
             onClick={() => {
               setMode("starter");
+              setContainerType("jar-starter");
               setStep(1);
             }}
           >
@@ -110,6 +111,16 @@ export function BatchNewPage() {
           <div className="space-y-1"><Label>Starter (g)</Label><Input inputMode="numeric" value={starterG} onChange={(e) => setStarterG(e.target.value)} /></div>
         </div>
         <div className="space-y-1">
+          <Label>Container</Label>
+          <Select value={containerType} onValueChange={(v) => setContainerType(v ?? "jar-starter")}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="jar-starter">Jar (starter)</SelectItem>
+              <SelectItem value="other">Other</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
           <Label>Station</Label>
           <Select value={stationId?.toString() ?? ""} onValueChange={(v) => setStationId(v ? Number(v) : null)}>
             <SelectTrigger><SelectValue placeholder="No station" /></SelectTrigger>
@@ -138,7 +149,7 @@ export function BatchNewPage() {
                 extras_json: null,
                 mixed_at: now,
                 notes: null,
-                children: [{ weight_g: totalG, container_type: "default", station_id: stationId, inkbird_probe: null }],
+                children: [{ weight_g: totalG, container_type: containerType, station_id: stationId, inkbird_probe: null }],
               });
               toast.success("Starter refreshed");
               nav("/");
