@@ -72,6 +72,7 @@ export interface NewBatchInput {
   type: "starter" | "dough";
   root_starter_id: string;
   parent_item_id: string | null;
+  parent_generation?: number;
   flour_g: number;
   water_g: number;
   starter_g: number | null;
@@ -121,6 +122,7 @@ export function useCreateBatch() {
         .select("short_id")
         .like("short_id", `${prefix}%`);
       const offset = existing?.length ?? 0;
+      const generation = (input.parent_generation ?? 0) + 1;
       const itemsPayload = input.children.map((c, i) => ({
         batch_id: batch.id,
         type: input.type,
@@ -129,6 +131,7 @@ export function useCreateBatch() {
         weight_g: c.weight_g,
         station_id: c.station_id,
         inkbird_probe: c.inkbird_probe,
+        generation,
       }));
       const { data: items, error: iErr } = await supabase
         .from("items")
@@ -157,6 +160,24 @@ export function useCreateBatch() {
       qc.invalidateQueries({ queryKey: ["batches"] });
       qc.invalidateQueries({ queryKey: ["items"] });
       qc.invalidateQueries({ queryKey: ["sessions"] });
+      qc.invalidateQueries({ queryKey: ["starter_lineage"] });
+    },
+  });
+}
+
+export function useRetireStarter() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (itemId: string) => {
+      const { error } = await supabase
+        .from("items")
+        .update({ retired_at: new Date().toISOString() })
+        .eq("id", itemId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["items"] });
+      qc.invalidateQueries({ queryKey: ["starter_lineage"] });
     },
   });
 }

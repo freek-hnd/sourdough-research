@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,7 +15,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { useRootStarters } from "@/hooks/useRootStarters";
+import { useStarterLineage } from "@/hooks/useStarterLineage";
 import { useCreateRootStarter } from "@/hooks/useMutations";
+import { LineageTree } from "@/components/LineageTree";
+import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 
 export function StartersPage() {
   const { data: starters, isLoading } = useRootStarters();
@@ -60,18 +64,57 @@ export function StartersPage() {
       ) : !starters || starters.length === 0 ? (
         <Card><CardContent className="p-6 text-center text-muted-foreground">No starters yet.</CardContent></Card>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {starters.map((s) => (
-            <Card key={s.id}>
-              <CardHeader className="pb-2"><CardTitle className="text-base">{s.name}</CardTitle></CardHeader>
-              <CardContent className="text-sm text-muted-foreground">
-                <div>Origin: {s.origin}</div>
-                {s.description && <div className="mt-1">{s.description}</div>}
-              </CardContent>
-            </Card>
+            <StarterSection key={s.id} id={s.id} name={s.name} origin={s.origin} description={s.description} />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+function StarterSection({ id, name, origin, description }: { id: string; name: string; origin: string; description: string | null }) {
+  const nav = useNavigate();
+  const [expanded, setExpanded] = useState(true);
+  const { data: tree, isLoading } = useStarterLineage(expanded ? id : undefined);
+
+  return (
+    <Card>
+      <button
+        className="flex w-full items-center gap-2 px-4 py-3 text-left"
+        onClick={() => setExpanded(!expanded)}
+      >
+        {expanded ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+        <div className="flex-1">
+          <div className="font-medium">{name}</div>
+          <div className="text-xs text-muted-foreground">{origin}{description ? ` — ${description}` : ""}</div>
+        </div>
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={(e) => {
+            e.stopPropagation();
+            nav(`/batch/new?parent=root_${id}`);
+          }}
+        >
+          <RefreshCw className="size-3 mr-1" />
+          Refresh
+        </Button>
+      </button>
+      {expanded && (
+        <div className="border-t px-2 py-2">
+          {isLoading ? (
+            <Skeleton className="mx-2 h-8 w-full" />
+          ) : !tree || tree.length === 0 ? (
+            <div className="px-2 py-3 text-center text-sm text-muted-foreground">
+              No refreshes yet. Start your first refresh to begin the lineage.
+            </div>
+          ) : (
+            <LineageTree nodes={tree} />
+          )}
+        </div>
+      )}
+    </Card>
   );
 }

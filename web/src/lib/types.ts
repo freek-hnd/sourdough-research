@@ -47,8 +47,26 @@ export interface Item {
   weight_g: number;
   station_id: number | null;
   inkbird_probe: 1 | 2 | 3 | 4 | null;
+  generation: number;
+  retired_at: ISODate | null;
   notes: string | null;
   created_at: ISODate;
+}
+
+export interface LineageNode {
+  id: UUID;
+  short_id: string;
+  batch_id: UUID;
+  weight_g: number;
+  generation: number;
+  created_at: ISODate;
+  retired_at: ISODate | null;
+  container_type: string;
+  parent_item_id: UUID | null;
+  flour_g: number;
+  water_g: number;
+  starter_g: number;
+  children: LineageNode[];
 }
 
 export interface Session {

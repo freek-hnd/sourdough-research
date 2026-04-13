@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { useRootStarters } from "@/hooks/useRootStarters";
 import { useStations } from "@/hooks/useStations";
 import { useCreateBatch } from "@/hooks/useMutations";
+import { StarterPicker } from "@/components/StarterPicker";
 import { formatElapsed, generateShortId } from "@/lib/utils";
 
 type Mode = "choose" | "dough" | "starter";
@@ -34,6 +35,9 @@ interface WizardState {
   mode: Mode;
   step: number;
   rootStarterId: string;
+  parentItemId: string | null;
+  parentGeneration: number;
+  parentLabel: string;
   flour: string;
   water: string;
   starterG: string;
@@ -63,12 +67,16 @@ function clearWizardState() {
 
 export function BatchNewPage() {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
   const saved = loadWizardState();
 
   const [mode, setMode] = useState<Mode>(saved?.mode ?? "choose");
   const [step, setStep] = useState(saved?.step ?? 1);
 
   const [rootStarterId, setRootStarterId] = useState(saved?.rootStarterId ?? "");
+  const [parentItemId, setParentItemId] = useState<string | null>(saved?.parentItemId ?? null);
+  const [parentGeneration, setParentGeneration] = useState(saved?.parentGeneration ?? 0);
+  const [parentLabel, setParentLabel] = useState(saved?.parentLabel ?? "");
   const [flour, setFlour] = useState(saved?.flour ?? "");
   const [water, setWater] = useState(saved?.water ?? "");
   const [starterG, setStarterG] = useState(saved?.starterG ?? "");
@@ -81,6 +89,17 @@ export function BatchNewPage() {
   const [stationId, setStationId] = useState<number | null>(saved?.stationId ?? null);
   const [notes, setNotes] = useState(saved?.notes ?? "");
 
+  // Handle ?parent=<itemId> deep link
+  useEffect(() => {
+    const parentParam = searchParams.get("parent");
+    if (parentParam && mode === "choose") {
+      // Pre-select starter mode — the StarterPicker will resolve the item details
+      setMode("starter");
+      setStep(1);
+      setContainerType("jar-starter");
+    }
+  }, [searchParams, mode]);
+
   const { data: starters = [] } = useRootStarters();
   const { data: stations = [] } = useStations();
   const createBatch = useCreateBatch();
@@ -92,19 +111,23 @@ export function BatchNewPage() {
       return;
     }
     const state: WizardState = {
-      mode, step, rootStarterId, flour, water, starterG,
-      salt, extras, containerType, mixedAt, numChildren,
-      children, stationId, notes,
+      mode, step, rootStarterId, parentItemId, parentGeneration, parentLabel,
+      flour, water, starterG, salt, extras, containerType, mixedAt,
+      numChildren, children, stationId, notes,
     };
     localStorage.setItem(WIZARD_STORAGE_KEY, JSON.stringify(state));
-  }, [mode, step, rootStarterId, flour, water, starterG, salt, extras,
-      containerType, mixedAt, numChildren, children, stationId, notes]);
+  }, [mode, step, rootStarterId, parentItemId, parentGeneration, parentLabel,
+      flour, water, starterG, salt, extras, containerType, mixedAt,
+      numChildren, children, stationId, notes]);
 
   const reset = useCallback(() => {
     clearWizardState();
     setMode("choose");
     setStep(1);
     setRootStarterId("");
+    setParentItemId(null);
+    setParentGeneration(0);
+    setParentLabel("");
     setFlour("");
     setWater("");
     setStarterG("");
@@ -154,92 +177,181 @@ export function BatchNewPage() {
   }
 
   if (mode === "starter") {
-    return (
-      <div className="space-y-4 p-4">
-        <h1 className="text-lg font-semibold">Starter refresh</h1>
-        <div className="space-y-2">
-          <Label>Root starter</Label>
-          <Select value={rootStarterId} onValueChange={(v) => setRootStarterId(v ?? "")}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select...">
-                {starters.find((s) => s.id === rootStarterId)?.name ?? "Select..."}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {starters.map((s) => (
-                <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+    const starterNumChildren = numChildren > 1 ? numChildren : 1;
+
+    // Step 1: Pick parent starter
+    if (step === 1) {
+      return (
+        <div className="space-y-4 p-4">
+          <h1 className="text-lg font-semibold">Which starter are you refreshing?</h1>
+          <StarterPicker
+            onSelect={({ parentItemId: pid, parentGeneration: pg, rootStarterId: rsId, label }) => {
+              setParentItemId(pid);
+              setParentGeneration(pg);
+              setRootStarterId(rsId);
+              setParentLabel(label);
+              setStep(2);
+            }}
+          />
+          <Button variant="ghost" onClick={reset} className="w-full">Cancel</Button>
+        </div>
+      );
+    }
+
+    // Step 2: Feed amounts + split option
+    if (step === 2) {
+      return (
+        <div className="space-y-4 p-4">
+          <div className="flex items-center justify-between">
+            <h1 className="text-lg font-semibold">Feed starter</h1>
+            <Badge variant="outline">From: {parentLabel}</Badge>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="space-y-1"><Label>Flour (g)</Label><Input inputMode="numeric" value={flour} onChange={(e) => setFlour(e.target.value)} /></div>
+            <div className="space-y-1"><Label>Water (g)</Label><Input inputMode="numeric" value={water} onChange={(e) => setWater(e.target.value)} /></div>
+            <div className="space-y-1"><Label>Starter (g)</Label><Input inputMode="numeric" value={starterG} onChange={(e) => setStarterG(e.target.value)} /></div>
+          </div>
+          <div>
+            <Label>Number of jars</Label>
+            <div className="mt-2 flex gap-2">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <Button
+                  key={n}
+                  variant={starterNumChildren === n ? "default" : "outline"}
+                  className="flex-1 h-12"
+                  onClick={() => setNumChildren(n)}
+                >{n}</Button>
               ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          <div className="space-y-1"><Label>Flour (g)</Label><Input inputMode="numeric" value={flour} onChange={(e) => setFlour(e.target.value)} /></div>
-          <div className="space-y-1"><Label>Water (g)</Label><Input inputMode="numeric" value={water} onChange={(e) => setWater(e.target.value)} /></div>
-          <div className="space-y-1"><Label>Starter (g)</Label><Input inputMode="numeric" value={starterG} onChange={(e) => setStarterG(e.target.value)} /></div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-1">
-            <Label>Container</Label>
-            <Select value={containerType} onValueChange={(v) => setContainerType(v ?? "jar-starter")}>
-              <SelectTrigger>
-                <SelectValue>
-                  {containerType === "jar-starter" ? "Jar (starter)" : containerType === "jar-large" ? "Jar (large)" : containerType === "other" ? "Other" : containerType}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="jar-starter">Jar (starter)</SelectItem>
-                <SelectItem value="jar-large">Jar (large)</SelectItem>
-                <SelectItem value="other">Other</SelectItem>
-              </SelectContent>
-            </Select>
+            </div>
           </div>
-          <div className="space-y-1">
-            <Label>Station</Label>
-            <Select value={stationId?.toString() ?? ""} onValueChange={(v) => setStationId(v ? Number(v) : null)}>
-              <SelectTrigger>
-                <SelectValue placeholder="No station">
-                  {stationId ? `#${stationId} ${stations.find((s) => s.id === stationId)?.label ?? ""}` : "No station"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {stations.map((s) => (
-                  <SelectItem key={s.id} value={s.id.toString()}>#{s.id} {s.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          {starterNumChildren > 1 && (
+            <div className="space-y-2">
+              {Array.from({ length: starterNumChildren }, (_, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="w-8 font-mono">{String.fromCharCode(65 + i)}</span>
+                  <Select
+                    value={children[i]?.container_type ?? "jar-starter"}
+                    onValueChange={(v) => {
+                      const next = [...children];
+                      next[i] = { ...next[i], weight_g: next[i]?.weight_g ?? 0, container_type: v ?? "jar-starter", station_id: next[i]?.station_id ?? null, inkbird_probe: null };
+                      setChildren(next);
+                    }}
+                  >
+                    <SelectTrigger className="flex-1">
+                      <SelectValue>
+                        {(children[i]?.container_type ?? "jar-starter") === "jar-starter" ? "Jar (starter)" : (children[i]?.container_type ?? "jar-starter") === "jar-large" ? "Jar (large)" : "Other"}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="jar-starter">Jar (starter)</SelectItem>
+                      <SelectItem value="jar-large">Jar (large)</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={children[i]?.station_id?.toString() ?? ""}
+                    onValueChange={(v) => {
+                      const next = [...children];
+                      next[i] = { ...next[i], weight_g: next[i]?.weight_g ?? 0, container_type: next[i]?.container_type ?? "jar-starter", station_id: v ? Number(v) : null, inkbird_probe: null };
+                      setChildren(next);
+                    }}
+                  >
+                    <SelectTrigger className="flex-1">
+                      <SelectValue placeholder="Station">
+                        {children[i]?.station_id ? `#${children[i].station_id}` : "No station"}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {stations.map((s) => (
+                        <SelectItem key={s.id} value={s.id.toString()}>#{s.id} {s.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+          )}
+          {starterNumChildren === 1 && (
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label>Container</Label>
+                <Select value={containerType} onValueChange={(v) => setContainerType(v ?? "jar-starter")}>
+                  <SelectTrigger>
+                    <SelectValue>
+                      {containerType === "jar-starter" ? "Jar (starter)" : containerType === "jar-large" ? "Jar (large)" : containerType === "other" ? "Other" : containerType}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="jar-starter">Jar (starter)</SelectItem>
+                    <SelectItem value="jar-large">Jar (large)</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Station</Label>
+                <Select value={stationId?.toString() ?? ""} onValueChange={(v) => setStationId(v ? Number(v) : null)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="No station">
+                      {stationId ? `#${stationId} ${stations.find((s) => s.id === stationId)?.label ?? ""}` : "No station"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {stations.map((s) => (
+                      <SelectItem key={s.id} value={s.id.toString()}>#{s.id} {s.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+          <Button
+            className="h-12 w-full"
+            disabled={!flour || !water || !starterG || createBatch.isPending}
+            onClick={async () => {
+              const now = new Date().toISOString();
+              const totalG = Number(flour) + Number(water) + Number(starterG);
+              const childrenPayload = starterNumChildren === 1
+                ? [{ weight_g: totalG, container_type: containerType, station_id: stationId, inkbird_probe: null }]
+                : Array.from({ length: starterNumChildren }, (_, i) => ({
+                    weight_g: Math.round(totalG / starterNumChildren),
+                    container_type: children[i]?.container_type ?? "jar-starter",
+                    station_id: children[i]?.station_id ?? null,
+                    inkbird_probe: null,
+                  }));
+              try {
+                await createBatch.mutateAsync({
+                  type: "starter",
+                  root_starter_id: rootStarterId,
+                  parent_item_id: parentItemId,
+                  parent_generation: parentGeneration,
+                  flour_g: Number(flour),
+                  water_g: Number(water),
+                  starter_g: Number(starterG),
+                  salt_g: null,
+                  extras_json: null,
+                  mixed_at: now,
+                  notes: null,
+                  children: childrenPayload,
+                });
+                clearWizardState();
+                toast.success(starterNumChildren > 1 ? `Split into ${starterNumChildren} jars` : "Starter refreshed");
+                nav("/");
+              } catch (e) {
+                toast.error((e as Error).message);
+              }
+            }}
+          >Feed & start{starterNumChildren > 1 ? ` ${starterNumChildren} sessions` : " session"}</Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" className="flex-1" onClick={() => setStep(1)}>Back</Button>
+            <Button variant="ghost" className="flex-1" onClick={reset}>Cancel</Button>
           </div>
         </div>
-        <Button
-          className="h-12 w-full"
-          disabled={!rootStarterId || !flour || !water || !starterG || createBatch.isPending}
-          onClick={async () => {
-            const now = new Date().toISOString();
-            const totalG = Number(flour) + Number(water) + Number(starterG);
-            try {
-              await createBatch.mutateAsync({
-                type: "starter",
-                root_starter_id: rootStarterId,
-                parent_item_id: null,
-                flour_g: Number(flour),
-                water_g: Number(water),
-                starter_g: Number(starterG),
-                salt_g: null,
-                extras_json: null,
-                mixed_at: now,
-                notes: null,
-                children: [{ weight_g: totalG, container_type: containerType, station_id: stationId, inkbird_probe: null }],
-              });
-              clearWizardState();
-              toast.success("Starter refreshed");
-              nav("/");
-            } catch (e) {
-              toast.error((e as Error).message);
-            }
-          }}
-        >Feed & start session</Button>
-        <Button variant="ghost" onClick={reset} className="w-full">Cancel</Button>
-      </div>
-    );
+      );
+    }
+
+    // Fallback — shouldn't happen
+    return null;
   }
 
   // Dough flow

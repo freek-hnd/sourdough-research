@@ -19,9 +19,9 @@ import {
   useItemEvents,
   useLatestMeasurement,
 } from "@/hooks/useItem";
-import { useLogEvent, useDeleteEvent } from "@/hooks/useMutations";
+import { useLogEvent, useDeleteEvent, useRetireStarter } from "@/hooks/useMutations";
 import { formatElapsed, formatTime } from "@/lib/utils";
-import { Trash2 } from "lucide-react";
+import { Trash2, RefreshCw, Archive } from "lucide-react";
 
 const QUICK_ACTIONS = [
   { name: "stretch_fold", label: "🤲 Fold" },
@@ -41,14 +41,16 @@ export function ItemDetailPage() {
   const { data: events } = useItemEvents(item?.id);
   const logEvent = useLogEvent();
   const deleteEvent = useDeleteEvent();
+  const retireStarter = useRetireStarter();
   const [note, setNote] = useState("");
   const [sheetOpen, setSheetOpen] = useState(false);
   const undoTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   if (isLoading || !item) return <div className="p-4"><Skeleton className="h-32 w-full" /></div>;
 
-  const batch = item.batch as { root_starter?: { name: string } | null } | null;
+  const batch = item.batch as { root_starter?: { name: string } | null; parent_item_id?: string | null } | null;
   const starterName = batch?.root_starter?.name;
+  const isActiveStarter = item.type === "starter" && !item.retired_at;
 
   function fire(name: string) {
     if (!item) return;
@@ -91,16 +93,44 @@ export function ItemDetailPage() {
           <h1 className="font-mono text-2xl font-bold">{item.short_id}</h1>
           <div className="flex gap-2">
             <Badge variant="secondary">{item.type}</Badge>
+            {item.generation > 0 && <Badge variant="outline">Gen {item.generation}</Badge>}
             {item.station_id && <Badge>Station {item.station_id}</Badge>}
           </div>
         </div>
         {starterName && (
           <p className="text-sm text-muted-foreground">{starterName}</p>
         )}
+        {item.retired_at && (
+          <p className="text-sm text-destructive">Retired</p>
+        )}
         {session && (
           <p className="text-sm text-muted-foreground">Running for {formatElapsed(session.started_at)}</p>
         )}
       </div>
+
+      {isActiveStarter && (
+        <div className="flex gap-2">
+          <Button
+            className="flex-1 h-12"
+            onClick={() => nav(`/batch/new?parent=${item.id}`)}
+          >
+            <RefreshCw className="size-4 mr-2" />
+            Refresh this starter
+          </Button>
+          <Button
+            variant="outline"
+            className="h-12"
+            onClick={() => {
+              retireStarter.mutate(item.id, {
+                onSuccess: () => toast.success("Starter retired"),
+                onError: (err) => toast.error((err as Error).message),
+              });
+            }}
+          >
+            <Archive className="size-4" />
+          </Button>
+        </div>
+      )}
 
       {item.station_id && (
         <Card>
