@@ -59,6 +59,10 @@ def main() -> int:
 
     stop = threading.Event()
 
+    # Init I2C sensors in the MAIN thread — VL53L5CX ctypes driver segfaults
+    # if initialized from a spawned thread. Matches the old working logger.
+    sensors = local_sensors.init_sensors()
+
     mqtt = MqttSubscriber(broker=config.MQTT_BROKER, port=config.MQTT_PORT)
     try:
         mqtt.start()
@@ -66,7 +70,7 @@ def main() -> int:
         log.exception("MQTT start failed — continuing without it")
 
     threads = [
-        _spawn(local_sensors.run, "local_sensors", stop),
+        _spawn(local_sensors.run, "local_sensors", sensors, stop),
         _spawn(inkbird_reader.run, "inkbird", stop),
         _spawn(hanna_manager.run, "hanna", stop),
         _spawn(_sync_loop, "sync", stop),

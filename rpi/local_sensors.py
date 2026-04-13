@@ -4,11 +4,13 @@ Hardware:
   - SCD41 CO2/temp/humidity via I2C (/dev/i2c-1)
   - VL53L5CX 8x8 ToF distance sensor via I2C
   - DS18B20 1-Wire probe (optional, reads if present)
+
+IMPORTANT: init_sensors() MUST be called from the main thread. The
+VL53L5CX ctypes driver segfaults if initialized from a spawned thread.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
@@ -22,7 +24,6 @@ log = logging.getLogger(__name__)
 
 # ---------- Sensor constants ----------
 
-TOF_RESOLUTION_8X8 = 64  # vl53l5cx_ctypes.RESOLUTION_8X8
 TOF_FREQUENCY_HZ = 1
 STARTUP_WARMUP_SECONDS = 10
 FIRST_RETRY_SECONDS = 10
@@ -37,57 +38,66 @@ def _wait_until_next_aligned(interval: int, stop: threading.Event) -> float | No
     return next_tick
 
 
-def _init_i2c_bus():
-    """Initialize the I2C bus — must be called BEFORE any I2C sensor init.
+# ---------- Sensor initialization (MUST run in main thread) ----------
 
-    The VL53L5CX ctypes driver requires the bus to be set up via
-    busio.I2C first, otherwise it segfaults.
+def init_sensors() -> dict:
+    """Initialize all I2C sensors. Call from the MAIN thread only.
+
+    Returns a dict with 'i2c', 'scd41', 'tof' keys (any may be None on
+    failure). Matches the exact init order from the proven old logger:
+    1. I2C bus (busio.I2C) — required by VL53L5CX ctypes
+    2. SCD41 (stop + sleep + start periodic measurement)
+    3. VL53L5CX (only after I2C bus and SCD41 are ready)
     """
-    import board
-    import busio
+    sensors: dict = {"i2c": None, "scd41": None, "tof": None}
 
-    i2c = busio.I2C(board.SCL, board.SDA)
-    log.info("I2C bus initialized")
-    return i2c
-
-
-def _init_scd41():
-    """Initialize the SCD41 CO2/temp/humidity sensor over I2C.
-
-    Must be called AFTER _init_i2c_bus() and BEFORE _init_tof().
-    """
-    from sensirion_i2c_driver import I2cConnection
-    from sensirion_i2c_driver.linux_i2c_transceiver import LinuxI2cTransceiver
-    from sensirion_i2c_scd.scd4x.device import Scd4xI2cDevice
-
-    connection = I2cConnection(LinuxI2cTransceiver("/dev/i2c-1"))
-    scd41 = Scd4xI2cDevice(connection)
-
+    # 1. I2C bus — must be first
     try:
-        scd41.stop_periodic_measurement()
-        time.sleep(1)
+        import board
+        import busio
+        sensors["i2c"] = busio.I2C(board.SCL, board.SDA)
+        log.info("I2C bus initialized")
     except Exception:
-        pass
+        log.exception("I2C bus init failed — ToF will not work")
 
-    scd41.start_periodic_measurement()
-    log.info("SCD41 initialized and measuring")
-    return scd41
+    # 2. SCD41
+    try:
+        from sensirion_i2c_driver import I2cConnection
+        from sensirion_i2c_driver.linux_i2c_transceiver import LinuxI2cTransceiver
+        from sensirion_i2c_scd.scd4x.device import Scd4xI2cDevice
+
+        connection = I2cConnection(LinuxI2cTransceiver("/dev/i2c-1"))
+        scd41 = Scd4xI2cDevice(connection)
+        try:
+            scd41.stop_periodic_measurement()
+            time.sleep(1)
+        except Exception:
+            pass
+        scd41.start_periodic_measurement()
+        sensors["scd41"] = scd41
+        log.info("SCD41 initialized and measuring")
+    except Exception:
+        log.exception("SCD41 init failed")
+
+    # 3. VL53L5CX — only if I2C bus succeeded
+    if sensors["i2c"] is not None:
+        try:
+            import vl53l5cx_ctypes
+            tof = vl53l5cx_ctypes.VL53L5CX()
+            tof.set_resolution(vl53l5cx_ctypes.RESOLUTION_8X8)
+            tof.set_ranging_frequency_hz(TOF_FREQUENCY_HZ)
+            tof.start_ranging()
+            sensors["tof"] = tof
+            log.info("VL53L5CX initialized and ranging")
+        except Exception:
+            log.exception("VL53L5CX init failed")
+    else:
+        log.warning("Skipping VL53L5CX init — I2C bus not available")
+
+    return sensors
 
 
-def _init_tof():
-    """Initialize the VL53L5CX 8x8 Time-of-Flight sensor.
-
-    Must be called AFTER _init_i2c_bus() and _init_scd41().
-    """
-    import vl53l5cx_ctypes
-
-    tof = vl53l5cx_ctypes.VL53L5CX()
-    tof.set_resolution(vl53l5cx_ctypes.RESOLUTION_8X8)
-    tof.set_ranging_frequency_hz(TOF_FREQUENCY_HZ)
-    tof.start_ranging()
-    log.info("VL53L5CX initialized and ranging")
-    return tof
-
+# ---------- Sensor read helpers ----------
 
 def _read_scd41(scd41) -> dict[str, float | None]:
     """Read CO2, temperature, humidity from SCD41."""
@@ -163,36 +173,15 @@ def _read_ds18b20() -> dict[str, float | None]:
         return {"ds18b20_temp_c": None}
 
 
-def run(stop: threading.Event) -> None:
+# ---------- Main loop (runs in spawned thread) ----------
+
+def run(sensors: dict, stop: threading.Event) -> None:
     log.info("local_sensors thread started (interval=%ss)", config.MEASUREMENT_INTERVAL_SEC)
 
     conn = db.connect(config.DB_PATH)
 
-    # Initialize sensors in strict order matching the working old logger:
-    # 1. I2C bus first (required by VL53L5CX ctypes driver)
-    # 2. SCD41 (stop + sleep + start periodic measurement)
-    # 3. VL53L5CX ToF (only after I2C bus and SCD41 are ready)
-    i2c = None
-    scd41 = None
-    tof = None
-
-    try:
-        i2c = _init_i2c_bus()
-    except Exception:
-        log.exception("I2C bus init failed — ToF will not work")
-
-    try:
-        scd41 = _init_scd41()
-    except Exception:
-        log.exception("SCD41 init failed — will retry reads but expect None values")
-
-    if i2c is not None:
-        try:
-            tof = _init_tof()
-        except Exception:
-            log.exception("VL53L5CX init failed — will retry reads but expect None values")
-    else:
-        log.warning("Skipping VL53L5CX init — I2C bus not available")
+    scd41 = sensors.get("scd41")
+    tof = sensors.get("tof")
 
     # Warm-up period
     log.info("Warming up sensors for %ds...", STARTUP_WARMUP_SECONDS)
@@ -213,17 +202,14 @@ def run(stop: threading.Event) -> None:
 
             # SCD41
             if scd41 is not None:
-                scd_data = _read_scd41(scd41)
-                data.update(scd_data)
+                data.update(_read_scd41(scd41))
 
             # ToF
             if tof is not None:
-                tof_data = _read_tof(tof)
-                data.update(tof_data)
+                data.update(_read_tof(tof))
 
             # DS18B20 (optional)
-            ds_data = _read_ds18b20()
-            data.update(ds_data)
+            data.update(_read_ds18b20())
 
             db.insert_measurement(conn, station_id=config.STATION_ID, measured_at=measured_at, **data)
 
