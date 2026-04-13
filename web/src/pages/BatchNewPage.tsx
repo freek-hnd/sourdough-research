@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,32 +28,95 @@ interface Child {
   inkbird_probe: number | null;
 }
 
+const WIZARD_STORAGE_KEY = "sourdough_batch_wizard";
+
+interface WizardState {
+  mode: Mode;
+  step: number;
+  rootStarterId: string;
+  flour: string;
+  water: string;
+  starterG: string;
+  salt: string;
+  extras: string;
+  containerType: string;
+  mixedAt: string;
+  numChildren: number;
+  children: Child[];
+  stationId: number | null;
+  notes: string;
+}
+
+function loadWizardState(): Partial<WizardState> | null {
+  try {
+    const raw = localStorage.getItem(WIZARD_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as Partial<WizardState>;
+  } catch {
+    return null;
+  }
+}
+
+function clearWizardState() {
+  localStorage.removeItem(WIZARD_STORAGE_KEY);
+}
+
 export function BatchNewPage() {
   const nav = useNavigate();
-  const [mode, setMode] = useState<Mode>("choose");
-  const [step, setStep] = useState(1);
+  const saved = loadWizardState();
 
-  const [rootStarterId, setRootStarterId] = useState("");
-  const [flour, setFlour] = useState("");
-  const [water, setWater] = useState("");
-  const [starterG, setStarterG] = useState("");
-  const [salt, setSalt] = useState("");
-  const [extras, setExtras] = useState("");
-  const [containerType, setContainerType] = useState("default");
-  const [mixedAt, setMixedAt] = useState<string>("");
-  const [numChildren, setNumChildren] = useState(3);
-  const [children, setChildren] = useState<Child[]>([]);
-  const [stationId, setStationId] = useState<number | null>(null);
-  const [notes, setNotes] = useState("");
+  const [mode, setMode] = useState<Mode>(saved?.mode ?? "choose");
+  const [step, setStep] = useState(saved?.step ?? 1);
+
+  const [rootStarterId, setRootStarterId] = useState(saved?.rootStarterId ?? "");
+  const [flour, setFlour] = useState(saved?.flour ?? "");
+  const [water, setWater] = useState(saved?.water ?? "");
+  const [starterG, setStarterG] = useState(saved?.starterG ?? "");
+  const [salt, setSalt] = useState(saved?.salt ?? "");
+  const [extras, setExtras] = useState(saved?.extras ?? "");
+  const [containerType, setContainerType] = useState(saved?.containerType ?? "default");
+  const [mixedAt, setMixedAt] = useState<string>(saved?.mixedAt ?? "");
+  const [numChildren, setNumChildren] = useState(saved?.numChildren ?? 3);
+  const [children, setChildren] = useState<Child[]>(saved?.children ?? []);
+  const [stationId, setStationId] = useState<number | null>(saved?.stationId ?? null);
+  const [notes, setNotes] = useState(saved?.notes ?? "");
 
   const { data: starters = [] } = useRootStarters();
   const { data: stations = [] } = useStations();
   const createBatch = useCreateBatch();
 
-  function reset() {
+  // Persist wizard state to localStorage on every change
+  useEffect(() => {
+    if (mode === "choose") {
+      clearWizardState();
+      return;
+    }
+    const state: WizardState = {
+      mode, step, rootStarterId, flour, water, starterG,
+      salt, extras, containerType, mixedAt, numChildren,
+      children, stationId, notes,
+    };
+    localStorage.setItem(WIZARD_STORAGE_KEY, JSON.stringify(state));
+  }, [mode, step, rootStarterId, flour, water, starterG, salt, extras,
+      containerType, mixedAt, numChildren, children, stationId, notes]);
+
+  const reset = useCallback(() => {
+    clearWizardState();
     setMode("choose");
     setStep(1);
-  }
+    setRootStarterId("");
+    setFlour("");
+    setWater("");
+    setStarterG("");
+    setSalt("");
+    setExtras("");
+    setContainerType("default");
+    setMixedAt("");
+    setNumChildren(3);
+    setChildren([]);
+    setStationId(null);
+    setNotes("");
+  }, []);
 
   if (mode === "choose") {
     return (
@@ -151,6 +214,7 @@ export function BatchNewPage() {
                 notes: null,
                 children: [{ weight_g: totalG, container_type: containerType, station_id: stationId, inkbird_probe: null }],
               });
+              clearWizardState();
               toast.success("Starter refreshed");
               nav("/");
             } catch (e) {
@@ -351,6 +415,7 @@ export function BatchNewPage() {
                     inkbird_probe: c.inkbird_probe,
                   })),
                 });
+                clearWizardState();
                 toast.success(`Batch created — ${children.length} items`);
                 nav("/");
               } catch (e) {
