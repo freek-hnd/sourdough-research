@@ -44,6 +44,9 @@ export function ItemDetailPage() {
 
   if (isLoading || !item) return <div className="p-4"><Skeleton className="h-32 w-full" /></div>;
 
+  const batch = item.batch as { root_starter?: { name: string } | null } | null;
+  const starterName = batch?.root_starter?.name;
+
   function fire(name: string) {
     if (!item) return;
     logEvent.mutate(
@@ -62,8 +65,8 @@ export function ItemDetailPage() {
             {item.station_id && <Badge>Station {item.station_id}</Badge>}
           </div>
         </div>
-        {item.batch?.root_starter && (
-          <p className="text-sm text-muted-foreground">{item.batch.root_starter.name}</p>
+        {starterName && (
+          <p className="text-sm text-muted-foreground">{starterName}</p>
         )}
         {session && (
           <p className="text-sm text-muted-foreground">Running for {formatElapsed(session.started_at)}</p>
@@ -119,18 +122,23 @@ export function ItemDetailPage() {
 
       <section>
         <h2 className="mb-2 text-sm font-medium text-muted-foreground">Event history</h2>
-        <ul className="space-y-1 text-sm">
+        <div className="space-y-1 text-sm">
           {(events ?? []).map((e) => (
-            <li key={e.id} className="flex gap-3">
-              <span className="w-14 text-muted-foreground">{formatTime(e.occurred_at)}</span>
+            <div
+              key={e.id}
+              className="flex gap-3 rounded-lg border border-border bg-card px-3 py-2"
+            >
+              <span className="w-14 shrink-0 text-muted-foreground">{formatTime(e.occurred_at)}</span>
               <span className="flex-1">{e.event_name}</span>
               {e.notes && <span className="text-muted-foreground truncate max-w-[40%]">{e.notes}</span>}
-            </li>
+            </div>
           ))}
           {(!events || events.length === 0) && (
-            <li className="text-muted-foreground">No events yet.</li>
+            <div className="rounded-lg border border-border bg-card px-3 py-2 text-muted-foreground">
+              No events yet.
+            </div>
           )}
-        </ul>
+        </div>
       </section>
 
       {item.type === "dough" && (
