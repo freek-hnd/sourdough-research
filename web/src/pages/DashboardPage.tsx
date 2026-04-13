@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
@@ -32,42 +32,40 @@ export function DashboardPage() {
             </CardContent>
           </Card>
         ) : (
-          <div className="space-y-2">
-            {activeItems.map((item) => {
-              const batch = item.batch as { root_starter?: { name: string } | null } | null;
-              const station = item.station as { id: number; label: string } | null;
-              const session = (item as Record<string, unknown>).session as { started_at: string } | null;
-              const starterName = batch?.root_starter?.name;
-
-              return (
-                <Card
-                  key={item.id}
-                  className="cursor-pointer hover:bg-accent/50"
-                  onClick={() => navigate(`/item/${item.short_id}`)}
-                >
-                  <CardHeader className="pb-2">
-                    <CardTitle className="flex items-center justify-between text-base">
-                      <div>
-                        <span className="font-mono">{item.short_id}</span>
-                        {starterName && (
-                          <span className="ml-2 font-normal text-sm text-muted-foreground">{starterName}</span>
-                        )}
-                      </div>
-                      <div className="flex gap-2">
-                        <Badge variant="secondary">{item.type}</Badge>
-                        {station && <Badge>Station {station.id}</Badge>}
-                      </div>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-sm text-muted-foreground">
-                    {session
-                      ? `Running for ${formatElapsed(session.started_at)}`
-                      : `Created ${formatElapsed(item.created_at)} ago`}
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
+          <Card>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-xs text-muted-foreground">
+                    <th className="px-4 py-2 font-medium">Item</th>
+                    <th className="px-4 py-2 font-medium">Running</th>
+                    <th className="px-4 py-2 font-medium">Type</th>
+                    <th className="px-4 py-2 font-medium">Station</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeItems.map((item) => {
+                    const station = item.station as { id: number; label: string } | null;
+                    const session = (item as Record<string, unknown>).session as { started_at: string } | null;
+                    return (
+                      <tr
+                        key={item.id}
+                        className="cursor-pointer border-b last:border-0 hover:bg-accent/50"
+                        onClick={() => navigate(`/item/${item.short_id}`)}
+                      >
+                        <td className="px-4 py-2 font-mono font-medium">{item.short_id}</td>
+                        <td className="px-4 py-2 text-muted-foreground">
+                          {session ? formatElapsed(session.started_at) : `${formatElapsed(item.created_at)} ago`}
+                        </td>
+                        <td className="px-4 py-2"><Badge variant="secondary">{item.type}</Badge></td>
+                        <td className="px-4 py-2">{station ? <Badge>Station {station.id}</Badge> : "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         )}
       </section>
 
