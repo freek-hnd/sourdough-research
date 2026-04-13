@@ -240,11 +240,12 @@ def _read_probes() -> tuple[float | None, float | None, float | None, float | No
     return (temps[0], temps[1], temps[2], temps[3])
 
 
-def run(conn, stop: threading.Event) -> None:
+def run(stop: threading.Event) -> None:
     global _manager
 
     log.info("inkbird_reader thread started")
 
+    conn = db.connect(config.DB_PATH)
     _manager = _InkbirdBLEManager()
     _manager.start()
 
@@ -274,4 +275,5 @@ def run(conn, stop: threading.Event) -> None:
     finally:
         _manager.stop()
         _manager = None
+        conn.close()
         log.info("inkbird_reader thread stopped")

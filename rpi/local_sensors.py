@@ -143,8 +143,10 @@ def _read_ds18b20() -> dict[str, float | None]:
         return {"ds18b20_temp_c": None}
 
 
-def run(conn, stop: threading.Event) -> None:
+def run(stop: threading.Event) -> None:
     log.info("local_sensors thread started (interval=%ss)", config.MEASUREMENT_INTERVAL_SEC)
+
+    conn = db.connect(config.DB_PATH)
 
     # Initialize sensors
     scd41 = None
@@ -223,4 +225,5 @@ def run(conn, stop: threading.Event) -> None:
         except Exception:
             pass
 
+    conn.close()
     log.info("local_sensors thread stopped")

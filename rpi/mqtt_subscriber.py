@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 
+import config
 import db
 
 log = logging.getLogger(__name__)
@@ -43,13 +44,12 @@ def _normalize_ts(ts: str | int | float) -> str:
 class MqttSubscriber:
     def __init__(
         self,
-        conn: sqlite3.Connection,
         broker: str = "localhost",
         port: int = 1883,
         client_id: str = "rpi-collector",
     ) -> None:
-        self._conn = conn
-        self._lock = threading.Lock()  # sqlite conn is not thread-safe under paho's loop
+        self._conn: sqlite3.Connection | None = None
+        self._lock = threading.Lock()
         self._client = mqtt.Client(client_id=client_id, clean_session=True)
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
@@ -59,6 +59,7 @@ class MqttSubscriber:
     # ---- lifecycle ----
 
     def start(self) -> None:
+        self._conn = db.connect(config.DB_PATH)
         log.info("connecting to MQTT %s:%s", self._broker, self._port)
         self._client.connect(self._broker, self._port, keepalive=60)
         self._client.loop_start()
@@ -66,6 +67,9 @@ class MqttSubscriber:
     def stop(self) -> None:
         self._client.loop_stop()
         self._client.disconnect()
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
 
     # ---- callbacks ----
 

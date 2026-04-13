@@ -52,19 +52,23 @@ def main() -> int:
     )
     log.info("sourdough collector starting; db=%s", config.DB_PATH)
 
-    conn = db.init_db(config.DB_PATH)
+    # Init DB schema once from main thread, then close — each worker opens
+    # its own connection (SQLite objects can't cross threads).
+    init_conn = db.init_db(config.DB_PATH)
+    init_conn.close()
+
     stop = threading.Event()
 
-    mqtt = MqttSubscriber(conn, broker=config.MQTT_BROKER, port=config.MQTT_PORT)
+    mqtt = MqttSubscriber(broker=config.MQTT_BROKER, port=config.MQTT_PORT)
     try:
         mqtt.start()
     except Exception:
         log.exception("MQTT start failed — continuing without it")
 
     threads = [
-        _spawn(local_sensors.run, "local_sensors", conn, stop),
-        _spawn(inkbird_reader.run, "inkbird", conn, stop),
-        _spawn(hanna_manager.run, "hanna", conn, stop),
+        _spawn(local_sensors.run, "local_sensors", stop),
+        _spawn(inkbird_reader.run, "inkbird", stop),
+        _spawn(hanna_manager.run, "hanna", stop),
         _spawn(_sync_loop, "sync", stop),
     ]
 
@@ -86,7 +90,6 @@ def main() -> int:
             log.exception("MQTT stop failed")
         for t in threads:
             t.join(timeout=5)
-        conn.close()
         log.info("shutdown complete")
     return 0
 

@@ -349,11 +349,12 @@ def _poll_enable_events(conn, station_id: int):
         log.debug("failed to poll ph enable events", exc_info=True)
 
 
-def run(conn, stop: threading.Event) -> None:
+def run(stop: threading.Event) -> None:
     global _manager
 
     log.info("hanna_manager thread started")
 
+    conn = db.connect(config.DB_PATH)
     _manager = _HannaBLEManager()
     _manager.start()
 
@@ -386,4 +387,5 @@ def run(conn, stop: threading.Event) -> None:
         if _manager is not None:
             _manager.stop()
         _manager = None
+        conn.close()
         log.info("hanna_manager thread stopped")
