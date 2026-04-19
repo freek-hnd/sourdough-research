@@ -5,6 +5,9 @@ import { BatchNewPage } from "@/pages/BatchNewPage";
 import { ItemDetailPage } from "@/pages/ItemDetailPage";
 import { OutcomePage } from "@/pages/OutcomePage";
 import { StartersPage } from "@/pages/StartersPage";
+import { StarterDetailPage } from "@/pages/StarterDetailPage";
+import { StationsPage } from "@/pages/StationsPage";
+import { StationDetailPage } from "@/pages/StationDetailPage";
 import MonitorPage from "@/pages/MonitorPage";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -18,6 +21,9 @@ export default function App() {
           <Route path="/item/:shortId" element={<ItemDetailPage />} />
           <Route path="/outcome/:shortId" element={<OutcomePage />} />
           <Route path="/starters" element={<StartersPage />} />
+          <Route path="/starters/:id" element={<StarterDetailPage />} />
+          <Route path="/stations" element={<StationsPage />} />
+          <Route path="/stations/:id" element={<StationDetailPage />} />
           <Route path="/monitor" element={<MonitorPage />} />
         </Route>
       </Routes>
