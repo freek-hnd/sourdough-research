@@ -21,6 +21,7 @@ import {
 } from "@/hooks/useItem";
 import { useLogEvent, useDeleteEvent, useRetireStarter, useEndSession } from "@/hooks/useMutations";
 import { StationStatusDot } from "@/components/StationStatus";
+import { TofHeatmap } from "@/components/TofHeatmap";
 import { formatElapsed, formatTime } from "@/lib/utils";
 import { Trash2, RefreshCw, Archive } from "lucide-react";
 
@@ -154,6 +155,20 @@ export function ItemDetailPage() {
             <Stat label="Temp" value={measurement?.scd_temp_c ?? measurement?.ds18b20_temp_c} unit="°C" />
             <Stat label="Height" value={measurement?.tof_median_mm} unit="mm" />
             <Stat label="Weight" value={measurement?.load_cell_g} unit="g" />
+          </CardContent>
+        </Card>
+      )}
+
+      {measurement?.tof_grid && Array.isArray(measurement.tof_grid) && (
+        <Card>
+          <CardContent className="p-4">
+            <h2 className="mb-2 text-sm font-medium text-muted-foreground">ToF grid</h2>
+            <TofHeatmap
+              grid={measurement.tof_grid as number[]}
+              median={measurement.tof_median_mm}
+              min={measurement.tof_min_mm}
+              max={measurement.tof_max_mm}
+            />
           </CardContent>
         </Card>
       )}
