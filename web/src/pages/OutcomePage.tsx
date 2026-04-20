@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,15 +20,17 @@ import { supabase } from "@/lib/supabase";
 import { useItem } from "@/hooks/useItem";
 import { useActiveDoughs } from "@/hooks/useActiveDoughs";
 import { useLatestInkbirdReading, probeValue } from "@/hooks/useInkbird";
-import { useSaveOutcome } from "@/hooks/useMutations";
+import { useBakeState, useBakeMembers } from "@/hooks/useBakeState";
+import {
+  useStartBake,
+  useEndBake,
+  useSaveOutcome,
+} from "@/hooks/useMutations";
 
 const DIMENSIONS = ["oven_spring", "crumb", "crust", "taste", "acidity", "aroma"] as const;
 
-// Probes 1-3 are assignable to doughs. Probe 4 is reserved for ambient
-// oven temperature.
 const DOUGH_PROBES = [1, 2, 3] as const;
 const AMBIENT_PROBE = 4 as const;
-
 type ProbeNumber = 1 | 2 | 3;
 
 interface SelectedDough {
@@ -37,66 +39,73 @@ interface SelectedDough {
   weight_g: number;
   session_id: string | null;
   probe: ProbeNumber | null;
-  internal_temp_c: string;
-  loaf_weight_g: string;
 }
 
 export function OutcomePage() {
   const { shortId } = useParams<{ shortId: string }>();
   const nav = useNavigate();
   const { data: item, isLoading: itemLoading } = useItem(shortId);
-  const { data: doughs, isLoading: doughsLoading } = useActiveDoughs();
+  const { data: bakeInfo, isLoading: bakeLoading } = useBakeState(item?.id);
+
+  if (itemLoading || bakeLoading || !item || !bakeInfo) {
+    return <div className="p-4"><Skeleton className="h-32 w-full" /></div>;
+  }
+
+  if (bakeInfo.state === "done") {
+    // Already baked; redirect back to the item. Component would otherwise
+    // render empty.
+    nav(`/item/${item.short_id}`);
+    return null;
+  }
+
+  if (bakeInfo.state === "no-bake") {
+    return <StartBakeView item={item} />;
+  }
+
+  if (bakeInfo.state === "baking") {
+    return <EndBakeView item={item} bakeId={bakeInfo.bakeId!} />;
+  }
+
+  // awaiting-results
+  return <ResultsView item={item} bakeId={bakeInfo.bakeId!} />;
+}
+
+// =====================================================================
+// View 1 — Start bake
+// Select which doughs are going in + assign probes. Logs bake_start
+// events (session stays open). User is free to close the app after.
+// =====================================================================
+
+function StartBakeView({ item }: { item: NonNullable<ReturnType<typeof useItem>["data"]> }) {
+  const nav = useNavigate();
+  const { data: doughs, isLoading } = useActiveDoughs();
   const { data: inkbird } = useLatestInkbirdReading();
-  const save = useSaveOutcome();
+  const startBake = useStartBake();
 
-  const [step, setStep] = useState<1 | 2>(1);
-
-  // Step 1 state — which doughs are in this bake + probe assignments
-  // Keyed by item id. Seeded on first render once both queries resolve.
   const [selected, setSelected] = useState<Map<string, SelectedDough>>(new Map());
   const [seeded, setSeeded] = useState(false);
 
-  // Step 2 state — shared bake results + rating + photo
-  const [ovenTemp, setOvenTemp] = useState("");
-  const [duration, setDuration] = useState("");
-  const [notes, setNotes] = useState("");
-  const [raterName, setRaterName] = useState("");
-  const [scores, setScores] = useState<Record<string, number>>({});
-  const [photo, setPhoto] = useState<File | null>(null);
-
-  // Seed step 1: pre-select the item the user came from. Default its
-  // probe to whatever's already assigned on the item (inkbird_probe
-  // field on items — may already match the probe the user set at batch
-  // creation). Only do this once, when both queries have data.
-  if (!seeded && item && doughs) {
+  useEffect(() => {
+    if (seeded || !doughs) return;
     const next = new Map<string, SelectedDough>();
     const primary = doughs.find((d) => d.id === item.id);
     if (primary) {
       const probe = (primary.inkbird_probe ?? null) as ProbeNumber | null;
-      const validProbe = probe != null && DOUGH_PROBES.includes(probe as ProbeNumber)
-        ? probe
-        : null;
       next.set(primary.id, {
         id: primary.id,
         short_id: primary.short_id,
         weight_g: primary.weight_g,
         session_id: primary.session_id,
-        probe: validProbe,
-        internal_temp_c: "",
-        loaf_weight_g: String(primary.weight_g),
+        probe: probe != null && DOUGH_PROBES.includes(probe) ? probe : null,
       });
     }
     setSelected(next);
     setSeeded(true);
-  }
+  }, [seeded, doughs, item.id]);
 
-  const primaryItemId = item?.id ?? "";
-  const selectedList = useMemo(() => Array.from(selected.values()), [selected]);
-  const totalLoaves = selectedList.length;
   const ambientC = probeValue(inkbird, AMBIENT_PROBE as unknown as 4);
+  const selectedList = useMemo(() => Array.from(selected.values()), [selected]);
 
-  // Probes already used by other selected items (so we can disable them
-  // in other rows' dropdowns).
   function probesTakenBy(exceptItemId: string): Set<ProbeNumber> {
     const used = new Set<ProbeNumber>();
     for (const d of selected.values()) {
@@ -109,44 +118,350 @@ export function OutcomePage() {
     setSelected((prev) => {
       const next = new Map(prev);
       if (next.has(d.id)) {
-        // Don't let the user uncheck the primary — rating/photo anchor
-        // to that item. They can change primary by navigating to a
-        // different item first.
-        if (d.id === primaryItemId) return prev;
+        if (d.id === item.id) return prev; // can't uncheck primary
         next.delete(d.id);
       } else {
         const existingProbe = (d.inkbird_probe ?? null) as ProbeNumber | null;
-        const valid = existingProbe != null && DOUGH_PROBES.includes(existingProbe)
-          ? existingProbe
-          : null;
-        // Don't auto-assign a probe that's already taken by another selected dough
         const taken = probesTakenBy(d.id);
+        const valid =
+          existingProbe != null && DOUGH_PROBES.includes(existingProbe)
+            ? existingProbe
+            : null;
         next.set(d.id, {
           id: d.id,
           short_id: d.short_id,
           weight_g: d.weight_g,
           session_id: d.session_id,
           probe: valid != null && !taken.has(valid) ? valid : null,
-          internal_temp_c: "",
-          loaf_weight_g: String(d.weight_g),
         });
       }
       return next;
     });
   }
 
-  function updateDough(id: string, patch: Partial<SelectedDough>) {
+  function updateProbe(id: string, probe: ProbeNumber | null) {
     setSelected((prev) => {
       const next = new Map(prev);
       const cur = next.get(id);
       if (!cur) return prev;
+      next.set(id, { ...cur, probe });
+      return next;
+    });
+  }
+
+  async function onStart() {
+    try {
+      await startBake.mutateAsync({
+        items: selectedList.map((d) => ({
+          item_id: d.id,
+          session_id: d.session_id,
+          probe: d.probe,
+        })),
+      });
+      toast.success(
+        selectedList.length > 1
+          ? `Bake started — ${selectedList.length} loaves`
+          : "Bake started",
+      );
+      nav("/");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  if (isLoading) {
+    return <div className="p-4"><Skeleton className="h-32 w-full" /></div>;
+  }
+
+  return (
+    <div className="space-y-4 p-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-lg font-semibold">Start bake</h1>
+        <Badge variant="outline">1 of 3</Badge>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Log which loaves are going in the oven and assign probes. You can
+        close the app after — end the bake and log results later.
+      </p>
+
+      {/* Ambient probe — reference only */}
+      <Card>
+        <CardContent className="flex items-center justify-between p-3">
+          <div>
+            <div className="text-sm font-medium">Ambient (Probe 4)</div>
+            <div className="text-xs text-muted-foreground">Always reserved for oven ambient</div>
+          </div>
+          <div className="font-mono text-lg">
+            {ambientC != null ? `${ambientC.toFixed(1)}°C` : "—"}
+          </div>
+        </CardContent>
+      </Card>
+
+      <h2 className="text-sm font-medium text-muted-foreground">
+        Which doughs are in the oven?
+      </h2>
+
+      {!doughs || doughs.length === 0 ? (
+        <Card>
+          <CardContent className="p-4 text-sm text-muted-foreground">
+            No active doughs available.
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-2">
+          {doughs.map((d) => {
+            const sel = selected.get(d.id);
+            const isSelected = !!sel;
+            const isPrimary = d.id === item.id;
+            const takenByOthers = probesTakenBy(d.id);
+            const reading = probeValue(inkbird, sel?.probe ?? null);
+            return (
+              <Card key={d.id} className={isSelected ? "border-primary" : ""}>
+                <CardContent className="p-3 space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      disabled={isPrimary && isSelected}
+                      onChange={() => toggleDough(d)}
+                      className="size-4"
+                    />
+                    <span className="font-mono text-sm font-medium">{d.short_id}</span>
+                    <span className="text-xs text-muted-foreground">{d.weight_g}g</span>
+                    {isPrimary && <Badge variant="secondary" className="text-[10px]">primary</Badge>}
+                  </label>
+                  {isSelected && (
+                    <div className="flex items-center gap-2 pl-6">
+                      <Label className="text-xs text-muted-foreground">Probe:</Label>
+                      <Select
+                        value={sel.probe?.toString() ?? ""}
+                        onValueChange={(v) =>
+                          updateProbe(d.id, v ? (Number(v) as ProbeNumber) : null)
+                        }
+                      >
+                        <SelectTrigger className="flex-1">
+                          <SelectValue placeholder="None">
+                            {sel.probe ? `Probe ${sel.probe}` : "None"}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">None</SelectItem>
+                          {DOUGH_PROBES.map((n) => (
+                            <SelectItem
+                              key={n}
+                              value={n.toString()}
+                              disabled={takenByOthers.has(n)}
+                            >
+                              Probe {n}{takenByOthers.has(n) ? " (in use)" : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <div className="font-mono text-sm min-w-[4rem] text-right">
+                        {sel.probe == null
+                          ? "—"
+                          : reading != null
+                          ? `${reading.toFixed(1)}°C`
+                          : "—"}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      <Button
+        className="h-12 w-full"
+        disabled={selectedList.length === 0 || startBake.isPending}
+        onClick={onStart}
+      >
+        🔥 Start bake
+      </Button>
+      <Button variant="ghost" className="w-full" onClick={() => nav(-1)}>
+        Cancel
+      </Button>
+    </div>
+  );
+}
+
+// =====================================================================
+// View 2 — End bake
+// Bake is in progress. One click ends it for every loaf in the bake.
+// Each loaf's probe reading at this moment is captured so the results
+// step can prefill internal temp later (when the probe is no longer
+// inserted).
+// =====================================================================
+
+function EndBakeView({
+  item,
+  bakeId,
+}: {
+  item: NonNullable<ReturnType<typeof useItem>["data"]>;
+  bakeId: string;
+}) {
+  const nav = useNavigate();
+  const { data: members, isLoading } = useBakeMembers(bakeId);
+  const { data: inkbird } = useLatestInkbirdReading();
+  const endBake = useEndBake();
+
+  if (isLoading || !members) {
+    return <div className="p-4"><Skeleton className="h-32 w-full" /></div>;
+  }
+
+  async function onEnd() {
+    try {
+      await endBake.mutateAsync({
+        bakeId,
+        members: (members ?? []).map((m) => ({
+          session_id: m.sessionId,
+          final_temp_c: probeValue(inkbird, m.probe as 1 | 2 | 3 | 4 | null) ?? null,
+        })),
+      });
+      toast.success(
+        (members?.length ?? 0) > 1
+          ? `Bake ended — ${members?.length} loaves`
+          : "Bake ended",
+      );
+      // Send user back to the item so they see the 'Log results' button.
+      nav(`/item/${item.short_id}`);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  return (
+    <div className="space-y-4 p-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-lg font-semibold">End bake</h1>
+        <Badge variant="outline">2 of 3</Badge>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Current probe readings will be captured now so you can fill in
+        results later — even the next day.
+      </p>
+
+      <div className="space-y-2">
+        {(members ?? []).map((m) => {
+          const reading = probeValue(inkbird, m.probe as 1 | 2 | 3 | 4 | null);
+          return (
+            <Card key={m.itemId}>
+              <CardContent className="flex items-center justify-between p-3">
+                <div>
+                  <div className="font-mono text-sm font-medium">{m.shortId}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {m.probe ? `Probe ${m.probe}` : "no probe"}
+                  </div>
+                </div>
+                <div className="font-mono text-lg">
+                  {reading != null ? `${reading.toFixed(1)}°C` : "—"}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      <Button
+        className="h-12 w-full"
+        disabled={endBake.isPending}
+        onClick={onEnd}
+      >
+        🧊 End bake
+      </Button>
+      <Button variant="ghost" className="w-full" onClick={() => nav(-1)}>
+        Cancel
+      </Button>
+    </div>
+  );
+}
+
+// =====================================================================
+// View 3 — Log results
+// Bake is over. Now fill in oven temp, duration, per-loaf internal
+// temp + final weight, rating, photo, notes.
+// =====================================================================
+
+function ResultsView({
+  item,
+  bakeId,
+}: {
+  item: NonNullable<ReturnType<typeof useItem>["data"]>;
+  bakeId: string;
+}) {
+  const nav = useNavigate();
+  const { data: members, isLoading: membersLoading } = useBakeMembers(bakeId);
+  const save = useSaveOutcome();
+
+  const [ovenTemp, setOvenTemp] = useState("");
+  const [duration, setDuration] = useState("");
+  const [notes, setNotes] = useState("");
+  const [raterName, setRaterName] = useState("");
+  const [scores, setScores] = useState<Record<string, number>>({});
+  const [photo, setPhoto] = useState<File | null>(null);
+
+  // Per-loaf inputs, seeded from the probe readings captured at bake_end
+  const [loafFields, setLoafFields] = useState<
+    Map<string, { internal_temp_c: string; loaf_weight_g: string }>
+  >(new Map());
+
+  // Seed loafFields once members load — prefill internal_temp_c from
+  // the bake_end captured reading. Need to fetch bake_end events to
+  // extract final_temp_c per loaf.
+  const [seeded, setSeeded] = useState(false);
+  useEffect(() => {
+    if (seeded || !members || members.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const sessionIds = members.map((m) => m.sessionId);
+      const { data: endEvents } = await supabase
+        .from("events")
+        .select("session_id, notes")
+        .eq("event_name", "bake_end")
+        .eq("value", bakeId)
+        .in("session_id", sessionIds);
+      if (cancelled) return;
+
+      const finalBySession = new Map<string, number | null>();
+      (endEvents ?? []).forEach((e) => {
+        let v: number | null = null;
+        try {
+          const parsed = JSON.parse(e.notes || "{}");
+          v = typeof parsed.final_temp_c === "number" ? parsed.final_temp_c : null;
+        } catch { /* ignore */ }
+        if (e.session_id) finalBySession.set(e.session_id, v);
+      });
+
+      const next = new Map<string, { internal_temp_c: string; loaf_weight_g: string }>();
+      for (const m of members) {
+        const finalTemp = finalBySession.get(m.sessionId);
+        next.set(m.itemId, {
+          internal_temp_c: finalTemp != null ? finalTemp.toFixed(1) : "",
+          loaf_weight_g: String(m.weightG),
+        });
+      }
+      setLoafFields(next);
+      setSeeded(true);
+    })();
+    return () => { cancelled = true; };
+  }, [seeded, members, bakeId]);
+
+  function updateLoaf(
+    id: string,
+    patch: Partial<{ internal_temp_c: string; loaf_weight_g: string }>,
+  ) {
+    setLoafFields((prev) => {
+      const next = new Map(prev);
+      const cur = next.get(id) ?? { internal_temp_c: "", loaf_weight_g: "" };
       next.set(id, { ...cur, ...patch });
       return next;
     });
   }
 
   async function submit() {
-    if (!item || selectedList.length === 0) return;
+    if (!item || !members) return;
 
     let photoUrl: string | null = null;
     if (photo) {
@@ -163,13 +478,16 @@ export function OutcomePage() {
     try {
       await save.mutateAsync({
         primary_item_id: item.id,
-        items: selectedList.map((d) => ({
-          id: d.id,
-          session_id: d.session_id,
-          inkbird_probe: d.probe,
-          internal_temp_c: d.internal_temp_c ? Number(d.internal_temp_c) : null,
-          loaf_weight_g: d.loaf_weight_g ? Number(d.loaf_weight_g) : null,
-        })),
+        items: members.map((m) => {
+          const f = loafFields.get(m.itemId);
+          return {
+            id: m.itemId,
+            session_id: m.sessionId,
+            inkbird_probe: m.probe,
+            internal_temp_c: f?.internal_temp_c ? Number(f.internal_temp_c) : null,
+            loaf_weight_g: f?.loaf_weight_g ? Number(f.loaf_weight_g) : null,
+          };
+        }),
         outcome_shared: {
           bake_temp_c: ovenTemp ? Number(ovenTemp) : null,
           bake_duration_min: duration ? Number(duration) : null,
@@ -182,9 +500,9 @@ export function OutcomePage() {
         photo_url: photoUrl,
       });
       toast.success(
-        totalLoaves > 1
-          ? `Bake saved — ${totalLoaves} loaves`
-          : "Bake saved",
+        members.length > 1
+          ? `Results saved — ${members.length} loaves`
+          : "Results saved",
       );
       nav("/");
     } catch (e) {
@@ -192,139 +510,19 @@ export function OutcomePage() {
     }
   }
 
-  if (itemLoading || doughsLoading || !item) {
+  if (membersLoading || !members) {
     return <div className="p-4"><Skeleton className="h-32 w-full" /></div>;
   }
 
-  // ------------------------------------------------------------------
-  // Step 1 — select doughs + assign probes
-  // ------------------------------------------------------------------
-  if (step === 1) {
-    return (
-      <div className="space-y-4 p-4">
-        <div className="flex items-center justify-between">
-          <h1 className="text-lg font-semibold">Start bake</h1>
-          <Badge variant="outline">Step 1/2</Badge>
-        </div>
+  const totalLoaves = members.length;
 
-        {/* Ambient (probe 4) — shown for reference, not assignable */}
-        <Card>
-          <CardContent className="flex items-center justify-between p-3">
-            <div>
-              <div className="text-sm font-medium">Ambient (Probe 4)</div>
-              <div className="text-xs text-muted-foreground">Always reserved for oven ambient temperature</div>
-            </div>
-            <div className="font-mono text-lg">
-              {ambientC != null ? `${ambientC.toFixed(1)}°C` : "—"}
-            </div>
-          </CardContent>
-        </Card>
-
-        <h2 className="text-sm font-medium text-muted-foreground">
-          Which doughs are in the oven?
-        </h2>
-
-        {(!doughs || doughs.length === 0) ? (
-          <Card><CardContent className="p-4 text-sm text-muted-foreground">
-            No active doughs available.
-          </CardContent></Card>
-        ) : (
-          <div className="space-y-2">
-            {doughs.map((d) => {
-              const sel = selected.get(d.id);
-              const isSelected = !!sel;
-              const isPrimary = d.id === primaryItemId;
-              const takenByOthers = probesTakenBy(d.id);
-              const currentProbeReading = probeValue(inkbird, sel?.probe ?? null);
-
-              return (
-                <Card
-                  key={d.id}
-                  className={isSelected ? "border-primary" : ""}
-                >
-                  <CardContent className="p-3 space-y-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        disabled={isPrimary && isSelected}
-                        onChange={() => toggleDough(d)}
-                        className="size-4"
-                      />
-                      <span className="font-mono text-sm font-medium">{d.short_id}</span>
-                      <span className="text-xs text-muted-foreground">{d.weight_g}g</span>
-                      {isPrimary && <Badge variant="secondary" className="text-[10px]">primary</Badge>}
-                    </label>
-
-                    {isSelected && (
-                      <div className="flex items-center gap-2 pl-6">
-                        <Label className="text-xs text-muted-foreground">Probe:</Label>
-                        <Select
-                          value={sel.probe?.toString() ?? ""}
-                          onValueChange={(v) =>
-                            updateDough(d.id, { probe: v ? (Number(v) as ProbeNumber) : null })
-                          }
-                        >
-                          <SelectTrigger className="flex-1">
-                            <SelectValue placeholder="None">
-                              {sel.probe ? `Probe ${sel.probe}` : "None"}
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="">None</SelectItem>
-                            {DOUGH_PROBES.map((n) => (
-                              <SelectItem
-                                key={n}
-                                value={n.toString()}
-                                disabled={takenByOthers.has(n)}
-                              >
-                                Probe {n}{takenByOthers.has(n) ? " (in use)" : ""}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <div className="font-mono text-sm min-w-[4rem] text-right">
-                          {sel.probe == null
-                            ? "—"
-                            : currentProbeReading != null
-                            ? `${currentProbeReading.toFixed(1)}°C`
-                            : "—"}
-                        </div>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        )}
-
-        <Button
-          className="h-12 w-full"
-          disabled={totalLoaves === 0}
-          onClick={() => setStep(2)}
-        >Next: bake results →</Button>
-        <Button variant="ghost" className="w-full" onClick={() => nav(-1)}>Cancel</Button>
-      </div>
-    );
-  }
-
-  // ------------------------------------------------------------------
-  // Step 2 — results
-  // ------------------------------------------------------------------
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">Bake results</h1>
-        <Badge variant="outline">Step 2/2</Badge>
+        <Badge variant="outline">3 of 3</Badge>
       </div>
 
-      <div className="text-xs text-muted-foreground">
-        {totalLoaves} loaf{totalLoaves === 1 ? "" : "s"} · ambient{" "}
-        {ambientC != null ? `${ambientC.toFixed(1)}°C` : "—"}
-      </div>
-
-      {/* Shared oven settings */}
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
           <Label>Oven temp (°C)</Label>
@@ -344,48 +542,34 @@ export function OutcomePage() {
         </div>
       </div>
 
-      {/* Per-loaf readings */}
       <div className="space-y-2">
         <h2 className="text-sm font-medium text-muted-foreground">Per-loaf readings</h2>
-        {selectedList.map((d) => {
-          const liveTemp = probeValue(inkbird, d.probe);
+        {members.map((m) => {
+          const f = loafFields.get(m.itemId);
           return (
-            <Card key={d.id}>
+            <Card key={m.itemId}>
               <CardContent className="p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="font-mono text-sm font-medium">{d.short_id}</span>
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      {d.probe ? `Probe ${d.probe}` : "no probe"}
-                    </span>
-                  </div>
-                  {d.probe != null && liveTemp != null && (
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      onClick={() =>
-                        updateDough(d.id, { internal_temp_c: liveTemp.toFixed(1) })
-                      }
-                    >
-                      Use live {liveTemp.toFixed(1)}°C
-                    </Button>
-                  )}
+                <div>
+                  <span className="font-mono text-sm font-medium">{m.shortId}</span>
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {m.probe ? `Probe ${m.probe}` : "no probe"}
+                  </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div className="space-y-1">
                     <Label className="text-xs">Internal temp (°C)</Label>
                     <Input
                       inputMode="numeric"
-                      value={d.internal_temp_c}
-                      onChange={(e) => updateDough(d.id, { internal_temp_c: e.target.value })}
+                      value={f?.internal_temp_c ?? ""}
+                      onChange={(e) => updateLoaf(m.itemId, { internal_temp_c: e.target.value })}
                     />
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs">Loaf weight (g)</Label>
                     <Input
                       inputMode="numeric"
-                      value={d.loaf_weight_g}
-                      onChange={(e) => updateDough(d.id, { loaf_weight_g: e.target.value })}
+                      value={f?.loaf_weight_g ?? ""}
+                      onChange={(e) => updateLoaf(m.itemId, { loaf_weight_g: e.target.value })}
                     />
                   </div>
                 </div>
@@ -439,10 +623,10 @@ export function OutcomePage() {
         onClick={submit}
         disabled={save.isPending}
       >
-        {totalLoaves > 1 ? `Save bake (${totalLoaves} loaves)` : "Save bake"}
+        {totalLoaves > 1 ? `Save results (${totalLoaves} loaves)` : "Save results"}
       </Button>
-      <Button variant="ghost" className="w-full" onClick={() => setStep(1)}>
-        ← Back
+      <Button variant="ghost" className="w-full" onClick={() => nav(-1)}>
+        Cancel
       </Button>
     </div>
   );

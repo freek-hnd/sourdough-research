@@ -22,6 +22,7 @@ import {
 import { useLogEvent, useDeleteEvent, useRetireStarter, useEndSession } from "@/hooks/useMutations";
 import { StationStatusDot } from "@/components/StationStatus";
 import { TofHeatmap } from "@/components/TofHeatmap";
+import { useBakeState } from "@/hooks/useBakeState";
 import { formatElapsed, formatTime } from "@/lib/utils";
 import { Trash2, RefreshCw, Archive } from "lucide-react";
 
@@ -48,6 +49,7 @@ export function ItemDetailPage() {
   const deleteEvent = useDeleteEvent();
   const retireStarter = useRetireStarter();
   const endSession = useEndSession();
+  const { data: bakeInfo } = useBakeState(item?.id);
   const [note, setNote] = useState("");
   const [sheetOpen, setSheetOpen] = useState(false);
   const undoTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -344,9 +346,23 @@ export function ItemDetailPage() {
         </div>
       </section>
 
-      {item.type === "dough" && (
+      {item.type === "dough" && bakeInfo?.state === "no-bake" && (
         <Link to={`/outcome/${item.short_id}`} className="block">
-          <Button variant="destructive" className="h-12 w-full">End session → Bake</Button>
+          <Button className="h-12 w-full">🔥 Start bake</Button>
+        </Link>
+      )}
+      {item.type === "dough" && bakeInfo?.state === "baking" && (
+        <Link to={`/outcome/${item.short_id}`} className="block">
+          <Button className="h-12 w-full bg-orange-600 hover:bg-orange-700 text-white">
+            🧊 End bake (in oven)
+          </Button>
+        </Link>
+      )}
+      {item.type === "dough" && bakeInfo?.state === "awaiting-results" && (
+        <Link to={`/outcome/${item.short_id}`} className="block">
+          <Button variant="destructive" className="h-12 w-full">
+            📝 Log bake results
+          </Button>
         </Link>
       )}
       <Button variant="ghost" className="w-full" onClick={() => nav("/")}>Back</Button>

@@ -165,6 +165,83 @@ export function useCreateBatch() {
   });
 }
 
+/**
+ * Logs a bake_start event for each dough being baked together.
+ * Shared bake_id (UUID) goes into event.value so the loaves can be
+ * matched up later as one bake. event.notes carries the JSON payload
+ * with the Inkbird probe number assigned to this loaf.
+ */
+export function useStartBake() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      items: Array<{
+        item_id: string;
+        session_id: string | null;
+        probe: number | null;
+      }>;
+    }) => {
+      const bakeId = crypto.randomUUID();
+      const occurredAt = new Date().toISOString();
+      const rows = input.items.map((it) => ({
+        id: crypto.randomUUID(),
+        event_name: "bake_start",
+        session_id: it.session_id,
+        station_id: null,
+        occurred_at: occurredAt,
+        value: bakeId,
+        notes: JSON.stringify({ probe: it.probe, item_id: it.item_id }),
+      }));
+      const { error } = await supabase.from("events").insert(rows).select();
+      if (error) throw error;
+      return { bakeId, occurredAt };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["events"] });
+      qc.invalidateQueries({ queryKey: ["bake_state"] });
+      qc.invalidateQueries({ queryKey: ["bake_members"] });
+    },
+  });
+}
+
+/**
+ * Logs a bake_end event for every loaf in the bake. Each event carries
+ * the shared bake_id in event.value plus (optionally) the probe's
+ * reading at oven-out time in event.notes as JSON, so the results
+ * step can prefill internal_temp_c even a day later when the probe is
+ * no longer in the loaf.
+ */
+export function useEndBake() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      bakeId: string;
+      members: Array<{
+        session_id: string;
+        final_temp_c: number | null;
+      }>;
+    }) => {
+      const occurredAt = new Date().toISOString();
+      const rows = input.members.map((m) => ({
+        id: crypto.randomUUID(),
+        event_name: "bake_end",
+        session_id: m.session_id,
+        station_id: null,
+        occurred_at: occurredAt,
+        value: input.bakeId,
+        notes: JSON.stringify({ final_temp_c: m.final_temp_c }),
+      }));
+      const { error } = await supabase.from("events").insert(rows).select();
+      if (error) throw error;
+      return { occurredAt };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["events"] });
+      qc.invalidateQueries({ queryKey: ["bake_state"] });
+    },
+  });
+}
+
 export function useRetireStarter() {
   const qc = useQueryClient();
   return useMutation({
