@@ -38,10 +38,25 @@ PubSubClient mqtt(netClient);
 
 char measurementsTopic[64];
 char statusTopic[64];
+char diagTopic[64];
 char clientId[32];
 
 uint32_t lastHeartbeatMs = 0;
 time_t   lastMeasurementEpoch = 0;
+
+// --- Diagnostic state tracking ----------------------------------------------
+// Keep short histories of time_t and millis() so we can detect stale/frozen
+// time, backwards jumps, and forward jumps (all suspects for the "measurements
+// stop but heartbeat continues" symptom).
+static time_t  prevTime = 0;
+static uint32_t prevTimeCheckMs = 0;
+static uint32_t stuckTimeCount = 0;
+static uint32_t loopIterations = 0;
+static uint32_t lastDiagPublishMs = 0;
+static uint32_t diagSeq = 0;
+static uint32_t wifiReconnectCount = 0;
+static uint32_t mqttReconnectCount = 0;
+static uint32_t fallbackPublishCount = 0;
 
 // --- Sensor globals ----------------------------------------------------------
 
@@ -358,6 +373,129 @@ static void publishHeartbeat() {
   mqtt.publish(statusTopic, (const uint8_t*)buf, n, true);
 }
 
+// --- Diagnostics -------------------------------------------------------------
+// Publish a rich snapshot of internal clock + network state to /diag. Called
+// every 60s and immediately on any detected anomaly. Goes to a separate topic
+// so it can be captured by the Pi without polluting measurement/status data.
+static void publishDiag(const char* reason, const char* extra = nullptr) {
+  diagSeq++;
+  time_t now = 0;
+  time(&now);
+  uint32_t nowMs = millis();
+
+  StaticJsonDocument<512> doc;
+  doc["station_id"]            = STATION_ID;
+  doc["seq"]                   = diagSeq;
+  doc["reason"]                = reason;
+  // Dual clock — this is the whole point. Compare time_t vs millis to see
+  // which one is misbehaving during an incident.
+  doc["time_t"]                = (int64_t)now;
+  doc["millis"]                = nowMs;
+  doc["uptime_s"]              = nowMs / 1000;
+  // State that feeds the NTP-aligned publish condition
+  doc["lastMeasurementEpoch"]  = (int64_t)lastMeasurementEpoch;
+  doc["aligned"]               = (int64_t)((now / INTERVAL_SEC) * INTERVAL_SEC);
+  doc["secsSinceLastMeas"]     = (int64_t)(now > 0 ? (now - lastMeasurementEpoch) : -1);
+  // Network
+  doc["wifiStatus"]            = (int)WiFi.status();
+  doc["rssi"]                  = WiFi.RSSI();
+  doc["mqttState"]             = mqtt.state();
+  doc["mqttConnected"]         = mqtt.connected();
+  // Health counters
+  doc["loopIter"]              = loopIterations;
+  doc["stuckTimeCount"]        = stuckTimeCount;
+  doc["wifiReconnects"]        = wifiReconnectCount;
+  doc["mqttReconnects"]        = mqttReconnectCount;
+  doc["fallbackPublishes"]     = fallbackPublishCount;
+  doc["freeHeap"]              = ESP.getFreeHeap();
+  if (extra) doc["extra"]      = extra;
+
+  char buf[512];
+  size_t n = serializeJson(doc, buf, sizeof(buf));
+  bool ok = mqtt.publish(diagTopic, (const uint8_t*)buf, n, false);
+  Serial.printf("[diag] seq=%u reason=%s time=%lld lastMeas=%lld mqtt=%d ok=%d\n",
+                (unsigned)diagSeq, reason, (long long)now,
+                (long long)lastMeasurementEpoch, mqtt.state(), ok);
+  lastDiagPublishMs = nowMs;
+}
+
+// Check the time_t clock for anomalies and publish a diag event if anything
+// looks wrong. Called on every loop iteration — cheap because it only compares
+// a couple of ints and publishes on edge transitions.
+static void checkTimeAnomalies(time_t now, uint32_t nowMs) {
+  // First call — just seed
+  if (prevTime == 0 && prevTimeCheckMs == 0) {
+    prevTime = now;
+    prevTimeCheckMs = nowMs;
+    return;
+  }
+
+  int64_t dMs   = (int64_t)nowMs - (int64_t)prevTimeCheckMs;
+  int64_t dTime = (int64_t)now   - (int64_t)prevTime;
+
+  // 1. time_t is invalid (0 or pre-2024). Only report once every 30s to
+  //    avoid flooding.
+  if (now > 0 && now < 1704067200 /* 2024-01-01 */ && dMs > 30000) {
+    publishDiag("time_invalid", "time_t below 2024");
+    prevTime = now;
+    prevTimeCheckMs = nowMs;
+    return;
+  }
+
+  // Only compare if >=2s of millis have passed — too small a window is noisy.
+  if (dMs < 2000) return;
+
+  // 2. time_t froze — millis advanced but time_t didn't
+  if (dTime == 0) {
+    stuckTimeCount++;
+    if (stuckTimeCount == 3) {
+      // Only publish once we've seen it 3 times in a row (6+ seconds stuck)
+      publishDiag("time_stuck", "time_t not advancing");
+    }
+  } else {
+    stuckTimeCount = 0;
+  }
+
+  // 3. time_t went backwards
+  if (dTime < -5) {
+    char extra[64];
+    snprintf(extra, sizeof(extra), "dTime=%lld dMs=%lld", (long long)dTime, (long long)dMs);
+    publishDiag("time_backwards", extra);
+  }
+
+  // 4. time_t jumped forward much more than millis (big NTP correction)
+  if (dTime > (dMs / 1000) + 60) {
+    char extra[64];
+    snprintf(extra, sizeof(extra), "dTime=%lld dMs=%lld", (long long)dTime, (long long)dMs);
+    publishDiag("time_jumped_forward", extra);
+  }
+
+  // 5. The condition that would actually cause the bug: alignment stuck
+  //    (lastMeasurementEpoch >= current aligned). Only meaningful once we've
+  //    had at least one measurement published.
+  if (lastMeasurementEpoch > 0 && now > 0) {
+    time_t currentAligned = (now / INTERVAL_SEC) * INTERVAL_SEC;
+    int64_t lag = (int64_t)now - (int64_t)lastMeasurementEpoch;
+    // If it's been 2x the interval or more since last measurement, and
+    // the aligned boundary is not ahead of lastMeasurementEpoch, the
+    // publish condition is wedged.
+    if (lag > 2 * INTERVAL_SEC && currentAligned <= lastMeasurementEpoch) {
+      // Debounce — only publish once per minute
+      static uint32_t lastWedgeDiag = 0;
+      if (nowMs - lastWedgeDiag > 60000) {
+        lastWedgeDiag = nowMs;
+        char extra[96];
+        snprintf(extra, sizeof(extra), "lag=%llds aligned=%lld <= lastMeas=%lld",
+                 (long long)lag, (long long)currentAligned, (long long)lastMeasurementEpoch);
+        publishDiag("alignment_wedged", extra);
+      }
+    }
+  }
+
+  prevTime = now;
+  prevTimeCheckMs = nowMs;
+}
+
 // --- Setup / Loop ------------------------------------------------------------
 void setup() {
   Serial.begin(115200);
@@ -367,6 +505,8 @@ void setup() {
            "sourdough/station/%d/measurements", STATION_ID);
   snprintf(statusTopic, sizeof(statusTopic),
            "sourdough/station/%d/status", STATION_ID);
+  snprintf(diagTopic, sizeof(diagTopic),
+           "sourdough/station/%d/diag", STATION_ID);
 
   // I2C bus — must init before SCD4x and VL53L5CX
   Wire.begin(I2C_SDA, I2C_SCL);
@@ -387,13 +527,31 @@ void setup() {
   esp_task_wdt_init(60, true);
   esp_task_wdt_add(NULL);
   Serial.println("[wdt] watchdog started (60s)");
+
+  // First diag publish — captures the post-boot state so we have a reference
+  // for what "healthy" looks like on this device.
+  publishDiag("boot");
 }
 
 void loop() {
   esp_task_wdt_reset();
+  loopIterations++;
 
-  if (WiFi.status() != WL_CONNECTED) connectWifi();
-  if (!mqtt.connected()) connectMqtt();
+  // Track WiFi/MQTT reconnects with diagnostics so we can correlate with
+  // measurement gaps in post-mortem analysis.
+  if (WiFi.status() != WL_CONNECTED) {
+    wifiReconnectCount++;
+    publishDiag("wifi_reconnect");  // best-effort; may fail if MQTT is down too
+    connectWifi();
+  }
+  if (!mqtt.connected()) {
+    mqttReconnectCount++;
+    int rc = mqtt.state();
+    char extra[32];
+    snprintf(extra, sizeof(extra), "prevState=%d", rc);
+    connectMqtt();
+    publishDiag("mqtt_reconnect", extra);
+  }
   mqtt.loop();
 
   time_t now;
@@ -402,6 +560,9 @@ void loop() {
   uint32_t nowMs = millis();
   static uint32_t lastMeasurementMs = 0;
   static uint32_t lastNtpSyncMs = 0;
+
+  // Watch the clock for anomalies every iteration.
+  checkTimeAnomalies(now, nowMs);
 
   // NTP-aligned interval: fire when epoch crosses a boundary.
   time_t aligned = (now / INTERVAL_SEC) * INTERVAL_SEC;
@@ -415,16 +576,34 @@ void loop() {
   // alignment got stuck), force-publish so the station doesn't go silent.
   if (lastMeasurementMs == 0) lastMeasurementMs = nowMs;
   if (nowMs - lastMeasurementMs > 10UL * 60UL * 1000UL) {
+    fallbackPublishCount++;
     Serial.println("[fallback] no measurement for 10min, forcing publish");
+    publishDiag("fallback_triggered");
     publishMeasurement(now > 0 ? now : (time_t)(nowMs / 1000));
     lastMeasurementMs = nowMs;
   }
 
-  // Periodic NTP resync to prevent long-term clock drift.
+  // Periodic NTP resync to prevent long-term clock drift. Log time before
+  // and after so we can see if resync caused a big jump.
   if (nowMs - lastNtpSyncMs > 6UL * 60UL * 60UL * 1000UL) {
     lastNtpSyncMs = nowMs;
+    time_t beforeResync = 0;
+    time(&beforeResync);
     configTime(GMT_OFFSET, DST_OFFSET, NTP_SERVER);
+    time_t afterResync = 0;
+    time(&afterResync);
     Serial.println("[ntp] resynced");
+    char extra[64];
+    snprintf(extra, sizeof(extra), "before=%lld after=%lld",
+             (long long)beforeResync, (long long)afterResync);
+    publishDiag("ntp_resync", extra);
+  }
+
+  // Periodic diagnostic heartbeat — every 60s even when nothing anomalous.
+  // Gives us a rolling baseline of time_t vs millis to compare against when
+  // something goes wrong.
+  if (nowMs - lastDiagPublishMs > 60000UL) {
+    publishDiag("periodic");
   }
 
   uint32_t ms = millis();

@@ -3,6 +3,10 @@
 Topics:
   sourdough/station/<id>/measurements  -> stored in `measurements`
   sourdough/station/<id>/status        -> logged as heartbeat event
+  sourdough/station/<id>/diag          -> logged as diag_<reason> event,
+                                          full JSON stored in notes for
+                                          post-mortem debugging of clock /
+                                          NTP / network issues.
 
 Payload contract (JSON): station_id (int) and ts (ISO-8601 UTC) are required.
 Any of the known sensor keys may be included; unknown keys are ignored.
@@ -25,6 +29,7 @@ log = logging.getLogger(__name__)
 
 TOPIC_MEASUREMENTS = "sourdough/station/+/measurements"
 TOPIC_STATUS = "sourdough/station/+/status"
+TOPIC_DIAG = "sourdough/station/+/diag"
 
 _KNOWN_SENSOR_KEYS = {
     "tof_median_mm", "tof_min_mm", "tof_max_mm", "tof_grid",
@@ -77,8 +82,13 @@ class MqttSubscriber:
         if rc != 0:
             log.error("MQTT connect failed rc=%s", rc)
             return
-        client.subscribe([(TOPIC_MEASUREMENTS, 1), (TOPIC_STATUS, 1)])
-        log.info("subscribed: %s, %s", TOPIC_MEASUREMENTS, TOPIC_STATUS)
+        client.subscribe([
+            (TOPIC_MEASUREMENTS, 1),
+            (TOPIC_STATUS, 1),
+            (TOPIC_DIAG, 1),
+        ])
+        log.info("subscribed: %s, %s, %s",
+                 TOPIC_MEASUREMENTS, TOPIC_STATUS, TOPIC_DIAG)
 
     def _on_message(self, client: mqtt.Client, userdata, msg: mqtt.MQTTMessage) -> None:
         try:
@@ -92,6 +102,8 @@ class MqttSubscriber:
                 self._handle_measurement(payload)
             elif msg.topic.endswith("/status"):
                 self._handle_status(payload)
+            elif msg.topic.endswith("/diag"):
+                self._handle_diag(payload)
         except Exception:  # never crash the loop
             log.exception("handler error on topic %s", msg.topic)
 
@@ -123,3 +135,42 @@ class MqttSubscriber:
                 notes=p.get("note"),
                 occurred_at=_normalize_ts(p["ts"]) if p.get("ts") else None,
             )
+
+    def _handle_diag(self, p: dict) -> None:
+        """Store ESP32 diagnostic events in the events table.
+
+        Each diag payload has a `reason` (periodic, time_stuck,
+        time_backwards, alignment_wedged, ntp_resync, fallback_triggered,
+        wifi_reconnect, mqtt_reconnect, boot, ...). We store the full JSON
+        in `notes` so post-mortem analysis can see all clock/network state
+        at the moment of the anomaly.
+        """
+        station_id = p.get("station_id")
+        if station_id is None:
+            return
+        reason = str(p.get("reason", "unknown"))
+        event_name = f"diag_{reason}"
+        # Derive an occurred_at. Use the ESP32's time_t if it looks valid;
+        # otherwise fall back to "now" on the Pi. That way diag events are
+        # still timestamped sanely even when the ESP32's clock is broken.
+        esp_time_t = p.get("time_t")
+        if isinstance(esp_time_t, (int, float)) and esp_time_t > 1704067200:
+            occurred_at = _normalize_ts(esp_time_t)
+        else:
+            occurred_at = datetime.now(timezone.utc).isoformat()
+        notes = json.dumps(p, separators=(",", ":"))
+        with self._lock:
+            db.insert_event(
+                self._conn,
+                event_name=event_name,
+                station_id=int(station_id),
+                value=str(p.get("seq", "")),
+                notes=notes,
+                occurred_at=occurred_at,
+            )
+        # Also log anomalies (not plain "periodic") so they show up in
+        # journalctl when watching live.
+        if reason != "periodic":
+            log.warning("station %s diag: %s (seq=%s, time=%s, lastMeas=%s)",
+                        station_id, reason, p.get("seq"),
+                        p.get("time_t"), p.get("lastMeasurementEpoch"))
