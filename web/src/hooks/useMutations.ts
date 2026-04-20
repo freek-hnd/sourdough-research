@@ -217,7 +217,8 @@ export function useEndBake() {
     mutationFn: async (input: {
       bakeId: string;
       members: Array<{
-        session_id: string;
+        item_id: string;
+        session_id: string | null;
         final_temp_c: number | null;
       }>;
     }) => {
@@ -229,7 +230,12 @@ export function useEndBake() {
         station_id: null,
         occurred_at: occurredAt,
         value: input.bakeId,
-        notes: JSON.stringify({ final_temp_c: m.final_temp_c }),
+        // item_id is embedded here so useBakeState can find this event
+        // for items that have no session (= no station assigned).
+        notes: JSON.stringify({
+          final_temp_c: m.final_temp_c,
+          item_id: m.item_id,
+        }),
       }));
       const { error } = await supabase.from("events").insert(rows).select();
       if (error) throw error;

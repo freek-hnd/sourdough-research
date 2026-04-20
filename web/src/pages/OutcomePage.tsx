@@ -316,6 +316,7 @@ function EndBakeView({
       await endBake.mutateAsync({
         bakeId,
         members: (members ?? []).map((m) => ({
+          item_id: m.itemId,
           session_id: m.sessionId,
           final_temp_c: probeValue(inkbird, m.probe as 1 | 2 | 3 | 4 | null) ?? null,
         })),
@@ -415,28 +416,29 @@ function ResultsView({
     if (seeded || !members || members.length === 0) return;
     let cancelled = false;
     (async () => {
-      const sessionIds = members.map((m) => m.sessionId);
+      // Fetch all bake_end events for this bake and key them by item_id
+      // (from notes JSON) — NOT session_id, because session-less items
+      // also need to prefill correctly.
       const { data: endEvents } = await supabase
         .from("events")
-        .select("session_id, notes")
+        .select("notes")
         .eq("event_name", "bake_end")
-        .eq("value", bakeId)
-        .in("session_id", sessionIds);
+        .eq("value", bakeId);
       if (cancelled) return;
 
-      const finalBySession = new Map<string, number | null>();
+      const finalByItem = new Map<string, number | null>();
       (endEvents ?? []).forEach((e) => {
-        let v: number | null = null;
         try {
           const parsed = JSON.parse(e.notes || "{}");
-          v = typeof parsed.final_temp_c === "number" ? parsed.final_temp_c : null;
+          const itemId = typeof parsed.item_id === "string" ? parsed.item_id : null;
+          const v = typeof parsed.final_temp_c === "number" ? parsed.final_temp_c : null;
+          if (itemId) finalByItem.set(itemId, v);
         } catch { /* ignore */ }
-        if (e.session_id) finalBySession.set(e.session_id, v);
       });
 
       const next = new Map<string, { internal_temp_c: string; loaf_weight_g: string }>();
       for (const m of members) {
-        const finalTemp = finalBySession.get(m.sessionId);
+        const finalTemp = finalByItem.get(m.itemId);
         next.set(m.itemId, {
           internal_temp_c: finalTemp != null ? finalTemp.toFixed(1) : "",
           loaf_weight_g: String(m.weightG),

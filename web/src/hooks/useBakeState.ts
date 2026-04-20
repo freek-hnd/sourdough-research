@@ -31,6 +31,7 @@ export interface BakeInfo {
 interface ParsedNotes {
   probe?: number | null;
   final_temp_c?: number | null;
+  item_id?: string;
 }
 
 function parseNotes(notes: string | null | undefined): ParsedNotes {
@@ -56,21 +57,18 @@ export function useBakeState(itemId: string | undefined) {
         .maybeSingle();
       if (outcome) return { state: "done" };
 
-      // Need the item's sessions so we can find bake_* events attached
-      // to any of them.
-      const { data: sessions } = await supabase
-        .from("sessions")
-        .select("id")
-        .eq("item_id", itemId!);
-      const sessionIds = (sessions ?? []).map((s) => s.id);
-      if (sessionIds.length === 0) return { state: "no-bake" };
+      // Bake events carry item_id in notes JSON. We match by ILIKE on that
+      // text so the state is findable even for items with no session
+      // (dough with no station assigned) — linking via session_id alone
+      // misses those.
+      const itemIdPattern = `%"item_id":"${itemId}"%`;
 
-      // Latest bake_start for this item's sessions.
+      // Latest bake_start for this item.
       const { data: startEvents } = await supabase
         .from("events")
         .select("id, value, notes, occurred_at")
         .eq("event_name", "bake_start")
-        .in("session_id", sessionIds)
+        .ilike("notes", itemIdPattern)
         .order("occurred_at", { ascending: false })
         .limit(1);
       const start = startEvents?.[0];
@@ -80,12 +78,13 @@ export function useBakeState(itemId: string | undefined) {
       const startNotes = parseNotes(start.notes);
       const probe = startNotes.probe ?? null;
 
-      // Matching bake_end for this item's sessions.
+      // Matching bake_end for this item (ignore bake_id here — we care
+      // about whether THIS loaf has been taken out of the oven).
       const { data: endEvents } = await supabase
         .from("events")
         .select("id, notes, occurred_at")
         .eq("event_name", "bake_end")
-        .in("session_id", sessionIds)
+        .ilike("notes", itemIdPattern)
         .order("occurred_at", { ascending: false })
         .limit(1);
       const end = endEvents?.[0];
@@ -122,6 +121,9 @@ export function useBakeMembers(bakeId: string | undefined) {
     queryKey: ["bake_members", bakeId],
     enabled: !!bakeId,
     queryFn: async () => {
+      // Pull all bake_start events for this bake. Item ids come from
+      // notes JSON — NOT from session_id — so items without a session
+      // (no station assigned) are still handled.
       const { data: events, error } = await supabase
         .from("events")
         .select("session_id, notes")
@@ -131,30 +133,21 @@ export function useBakeMembers(bakeId: string | undefined) {
       const rows = events ?? [];
       if (rows.length === 0) return [];
 
-      const sessionIds = rows.map((e) => e.session_id).filter((v): v is string => !!v);
-      if (sessionIds.length === 0) return [];
+      // Parse item_id out of each event and collect session_ids for
+      // items that do have one (so we can end those sessions later).
+      const perEvent = rows.map((e) => ({
+        itemId: parseNotes(e.notes).item_id as string | undefined,
+        sessionId: (e.session_id as string | null) ?? null,
+        probe: (parseNotes(e.notes).probe ?? null) as number | null,
+      })).filter((x): x is { itemId: string; sessionId: string | null; probe: number | null } => !!x.itemId);
 
-      // Fetch sessions and their items via a second round-trip.
-      // Doing it in two queries (vs. one nested join) keeps the
-      // Supabase-generated types trivially concrete.
-      const { data: sessionsRaw } = await supabase
-        .from("sessions")
-        .select("id, item_id, ended_at")
-        .in("id", sessionIds);
-      const sessions: Array<{ id: string; item_id: string; ended_at: string | null }> =
-        (sessionsRaw ?? []).map((s) => ({
-          id: s.id as string,
-          item_id: s.item_id as string,
-          ended_at: (s.ended_at as string | null) ?? null,
-        }));
+      if (perEvent.length === 0) return [];
 
-      const itemIds = Array.from(new Set(sessions.map((s) => s.item_id)));
-      const { data: itemsRaw } = itemIds.length > 0
-        ? await supabase
-            .from("items")
-            .select("id, short_id, weight_g")
-            .in("id", itemIds)
-        : { data: [] };
+      const itemIds = Array.from(new Set(perEvent.map((e) => e.itemId)));
+      const { data: itemsRaw } = await supabase
+        .from("items")
+        .select("id, short_id, weight_g")
+        .in("id", itemIds);
       const itemById = new Map<
         string,
         { id: string; short_id: string; weight_g: number }
@@ -167,25 +160,16 @@ export function useBakeMembers(bakeId: string | undefined) {
         });
       });
 
-      const sessionById = new Map<
-        string,
-        { id: string; item_id: string; ended_at: string | null }
-      >();
-      sessions.forEach((s) => sessionById.set(s.id, s));
-
-      return rows
+      return perEvent
         .map((e) => {
-          const notes = parseNotes(e.notes);
-          const sess = e.session_id ? sessionById.get(e.session_id) : undefined;
-          const itm = sess ? itemById.get(sess.item_id) : undefined;
-          if (!itm || !sess) return null;
+          const itm = itemById.get(e.itemId);
+          if (!itm) return null;
           return {
             itemId: itm.id,
             shortId: itm.short_id,
             weightG: itm.weight_g,
-            sessionId: sess.id,
-            probe: (notes.probe ?? null) as number | null,
-            sessionEndedAt: sess.ended_at,
+            sessionId: e.sessionId,
+            probe: e.probe,
           };
         })
         .filter((x): x is NonNullable<typeof x> => x != null);
