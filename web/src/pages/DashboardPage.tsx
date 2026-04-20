@@ -7,6 +7,7 @@ import { Separator } from "@/components/ui/separator";
 import { useActiveItems } from "@/hooks/useActiveItems";
 import { useRecentEvents } from "@/hooks/useRecentEvents";
 import { StationStatusDot } from "@/components/StationStatus";
+import { AnomalyBanner } from "@/components/AnomalyBanner";
 import { formatElapsed, formatTime } from "@/lib/utils";
 
 export function DashboardPage() {
@@ -21,6 +22,8 @@ export function DashboardPage() {
           + New Batch
         </Button>
       </Link>
+
+      <AnomalyBanner />
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium text-muted-foreground">Active items</h2>
