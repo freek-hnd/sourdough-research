@@ -134,28 +134,58 @@ export function useBakeMembers(bakeId: string | undefined) {
       const sessionIds = rows.map((e) => e.session_id).filter((v): v is string => !!v);
       if (sessionIds.length === 0) return [];
 
-      const { data: sessions } = await supabase
+      // Fetch sessions and their items via a second round-trip.
+      // Doing it in two queries (vs. one nested join) keeps the
+      // Supabase-generated types trivially concrete.
+      const { data: sessionsRaw } = await supabase
         .from("sessions")
-        .select("id, item_id, ended_at, item:items(id, short_id, weight_g)")
+        .select("id, item_id, ended_at")
         .in("id", sessionIds);
+      const sessions: Array<{ id: string; item_id: string; ended_at: string | null }> =
+        (sessionsRaw ?? []).map((s) => ({
+          id: s.id as string,
+          item_id: s.item_id as string,
+          ended_at: (s.ended_at as string | null) ?? null,
+        }));
 
-      // Build { itemId, shortId, weight_g, sessionId, probe } per row
-      const sessionById = new Map<string, (typeof sessions extends Array<infer T> ? T : never)>();
-      (sessions ?? []).forEach((s) => sessionById.set(s.id, s));
+      const itemIds = Array.from(new Set(sessions.map((s) => s.item_id)));
+      const { data: itemsRaw } = itemIds.length > 0
+        ? await supabase
+            .from("items")
+            .select("id, short_id, weight_g")
+            .in("id", itemIds)
+        : { data: [] };
+      const itemById = new Map<
+        string,
+        { id: string; short_id: string; weight_g: number }
+      >();
+      (itemsRaw ?? []).forEach((i) => {
+        itemById.set(i.id as string, {
+          id: i.id as string,
+          short_id: i.short_id as string,
+          weight_g: Number(i.weight_g),
+        });
+      });
+
+      const sessionById = new Map<
+        string,
+        { id: string; item_id: string; ended_at: string | null }
+      >();
+      sessions.forEach((s) => sessionById.set(s.id, s));
 
       return rows
         .map((e) => {
           const notes = parseNotes(e.notes);
           const sess = e.session_id ? sessionById.get(e.session_id) : undefined;
-          const itm = (sess as { item?: { id: string; short_id: string; weight_g: number } } | undefined)?.item;
-          if (!itm) return null;
+          const itm = sess ? itemById.get(sess.item_id) : undefined;
+          if (!itm || !sess) return null;
           return {
             itemId: itm.id,
             shortId: itm.short_id,
             weightG: itm.weight_g,
-            sessionId: e.session_id as string,
+            sessionId: sess.id,
             probe: (notes.probe ?? null) as number | null,
-            sessionEndedAt: (sess as { ended_at: string | null } | undefined)?.ended_at ?? null,
+            sessionEndedAt: sess.ended_at,
           };
         })
         .filter((x): x is NonNullable<typeof x> => x != null);
