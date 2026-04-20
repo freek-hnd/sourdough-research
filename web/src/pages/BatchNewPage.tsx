@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { useRootStarters } from "@/hooks/useRootStarters";
 import { useStations } from "@/hooks/useStations";
 import { useCreateBatch } from "@/hooks/useMutations";
 import { StarterPicker } from "@/components/StarterPicker";
@@ -100,7 +99,6 @@ export function BatchNewPage() {
     }
   }, [searchParams, mode]);
 
-  const { data: starters = [] } = useRootStarters();
   const { data: stations = [] } = useStations();
   const createBatch = useCreateBatch();
 
@@ -375,26 +373,27 @@ export function BatchNewPage() {
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold">New dough batch</h1>
-        <Badge variant="outline">Step {step}/4</Badge>
+        <Badge variant="outline">Step {step}/5</Badge>
       </div>
 
       {step === 1 && (
         <>
-          <div className="space-y-1">
-            <Label>Parent starter</Label>
-            <Select value={rootStarterId} onValueChange={(v) => setRootStarterId(v ?? "")}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select...">
-                  {starters.find((s) => s.id === rootStarterId)?.name ?? "Select..."}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {starters.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <h2 className="text-sm font-medium text-muted-foreground">Which starter are you using?</h2>
+          <StarterPicker
+            onSelect={({ parentItemId: pid, parentGeneration: pg, rootStarterId: rsId, label }) => {
+              setParentItemId(pid);
+              setParentGeneration(pg);
+              setRootStarterId(rsId);
+              setParentLabel(label);
+              setStep(2);
+            }}
+          />
+        </>
+      )}
+
+      {step === 2 && (
+        <>
+          <Badge variant="outline">Starter: {parentLabel}</Badge>
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1"><Label>Flour (g)</Label><Input inputMode="numeric" value={flour} onChange={(e) => setFlour(e.target.value)} /></div>
             <div className="space-y-1"><Label>Water (g)</Label><Input inputMode="numeric" value={water} onChange={(e) => setWater(e.target.value)} /></div>
@@ -416,16 +415,17 @@ export function BatchNewPage() {
           </div>
           <Button
             className="h-12 w-full"
-            disabled={!rootStarterId || !flour || !water}
+            disabled={!flour || !water}
             onClick={() => {
               setMixedAt(new Date().toISOString());
-              setStep(2);
+              setStep(3);
             }}
           >Start autolyse →</Button>
+          <Button variant="ghost" className="w-full" onClick={() => setStep(1)}>Back</Button>
         </>
       )}
 
-      {step === 2 && (
+      {step === 3 && (
         <>
           <Badge>Autolyse: {mixedAt ? formatElapsed(mixedAt) : "-"}</Badge>
           <div className="grid grid-cols-2 gap-2">
@@ -436,11 +436,12 @@ export function BatchNewPage() {
             <Label>Extras (optional)</Label>
             <Input value={extras} onChange={(e) => setExtras(e.target.value)} placeholder="seeds, rye, etc." />
           </div>
-          <Button className="h-12 w-full" disabled={!starterG || !salt} onClick={() => { setChildren(ensureChildren(numChildren)); setStep(3); }}>Mix done → Divide</Button>
+          <Button className="h-12 w-full" disabled={!starterG || !salt} onClick={() => { setChildren(ensureChildren(numChildren)); setStep(4); }}>Mix done → Divide</Button>
+          <Button variant="ghost" className="w-full" onClick={() => setStep(2)}>Back</Button>
         </>
       )}
 
-      {step === 3 && (
+      {step === 4 && (
         <>
           <div className="text-sm text-muted-foreground">Total: {totalG} g</div>
           <div>
@@ -473,11 +474,12 @@ export function BatchNewPage() {
               </div>
             ))}
           </div>
-          <Button className="h-12 w-full" onClick={() => setStep(4)}>Assign stations →</Button>
+          <Button className="h-12 w-full" onClick={() => setStep(5)}>Assign stations →</Button>
+          <Button variant="ghost" className="w-full" onClick={() => setStep(3)}>Back</Button>
         </>
       )}
 
-      {step === 4 && (
+      {step === 5 && (
         <>
           <div className="space-y-3">
             {children.map((c, i) => {
@@ -543,7 +545,8 @@ export function BatchNewPage() {
                 await createBatch.mutateAsync({
                   type: "dough",
                   root_starter_id: rootStarterId,
-                  parent_item_id: null,
+                  parent_item_id: parentItemId,
+                  parent_generation: parentGeneration,
                   flour_g: flourN,
                   water_g: waterN,
                   starter_g: starterN,

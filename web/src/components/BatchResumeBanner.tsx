@@ -13,10 +13,11 @@ interface WizardState {
 }
 
 const DOUGH_STEPS: Record<number, string> = {
-  1: "Mix flour & water",
-  2: "Add starter & salt",
-  3: "Divide",
-  4: "Assign stations",
+  1: "Choose parent starter",
+  2: "Mix flour & water",
+  3: "Add starter & salt",
+  4: "Divide",
+  5: "Assign stations",
 };
 
 const STARTER_STEPS: Record<number, string> = {
