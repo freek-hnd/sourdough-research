@@ -204,26 +204,46 @@ export function useSaveOutcome() {
     mutationFn: async (input: {
       // The "primary" item being baked — rating + photo attach only to it.
       primary_item_id: string;
-      // All items that share this bake outcome (includes primary). An
-      // outcome row is inserted for each, so multiple doughs baked in
-      // the same session can be logged in one go.
-      items: Array<{ id: string; session_id: string | null }>;
-      outcome: {
+      // All items baked together. Each carries its own internal temp,
+      // final loaf weight, and assigned Inkbird probe because those
+      // vary per loaf even in the same oven session.
+      items: Array<{
+        id: string;
+        session_id: string | null;
+        internal_temp_c: number | null;
         loaf_weight_g: number | null;
+        inkbird_probe: number | null;
+      }>;
+      // Shared fields — same for every loaf in this bake.
+      outcome_shared: {
         bake_temp_c: number | null;
         bake_duration_min: number | null;
-        internal_temp_c: number | null;
         notes: string | null;
         baked_at: string;
       };
       rating: { rater_name: string; scores_json: Record<string, number>; notes: string | null } | null;
       photo_url: string | null;
     }) => {
-      // One outcome row per item — same values, different item_id.
-      const outcomeRows = input.items.map((it) => ({
-        item_id: it.id,
-        ...input.outcome,
-      }));
+      // One outcome row per item; per-item fields differ, shared fields
+      // repeat. Inkbird probe is embedded in notes as "[Probe N]"
+      // prefix since the outcomes table doesn't (yet) have a probe column.
+      const outcomeRows = input.items.map((it) => {
+        const prefix = it.inkbird_probe != null ? `[Probe ${it.inkbird_probe}] ` : "";
+        const notes = input.outcome_shared.notes
+          ? `${prefix}${input.outcome_shared.notes}`
+          : prefix
+          ? prefix.trim()
+          : null;
+        return {
+          item_id: it.id,
+          bake_temp_c: input.outcome_shared.bake_temp_c,
+          bake_duration_min: input.outcome_shared.bake_duration_min,
+          baked_at: input.outcome_shared.baked_at,
+          internal_temp_c: it.internal_temp_c,
+          loaf_weight_g: it.loaf_weight_g,
+          notes,
+        };
+      });
       const { error: oErr } = await supabase
         .from("outcomes")
         .insert(outcomeRows);
