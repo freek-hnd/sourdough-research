@@ -9,17 +9,15 @@ topic for post-mortem debugging of clock/network stalls.
 
 ```
 esp32/src/
-├── src.ino             ← Arduino IDE entry point (essentially empty)
-├── main.cpp            ← the real firmware code
-├── secrets.h.example   ← template for WiFi/MQTT credentials
-└── secrets.h           ← YOUR credentials (gitignored, you create this)
+├── src.ino                       ← Arduino IDE entry point (stub)
+├── main.cpp                      ← the real firmware code
+├── device_config.h.example       ← template for per-device settings
+└── device_config.h               ← YOUR settings (gitignored, you create this)
 ```
 
-Both `src.ino` and `main.cpp` are needed: Arduino IDE requires a
-`.ino` file that matches the folder name (`src` → `src.ino`), and it
-automatically compiles every `.cpp`/`.h` file in the same folder
-alongside it. So the real code stays in `main.cpp` but Arduino IDE is
-happy because it sees `src.ino`.
+`device_config.h` holds **everything that differs between ESP32s**:
+WiFi credentials, MQTT broker IP, and the station ID. It's gitignored
+so `git pull` never overwrites it.
 
 ---
 
@@ -27,31 +25,30 @@ happy because it sees `src.ino`.
 
 ### One-time setup
 
-1. Open a terminal and make sure you already cloned the repo. If not:
+1. Open a terminal. If the repo isn't cloned yet:
    ```bash
    git clone https://github.com/freek-hnd/sourdough-research.git ~/Documents/GitHub/sourdough-research
    ```
 
-2. Create your `secrets.h` next to `main.cpp`:
+2. Create your `device_config.h`:
    ```bash
    cd ~/Documents/GitHub/sourdough-research/esp32/src
-   cp secrets.h.example secrets.h
+   cp device_config.h.example device_config.h
    ```
 
-3. Open `secrets.h` in any editor and fill in your real values:
+3. Edit `device_config.h` and fill in your real values:
    ```c
-   #define SECRET_WIFI_SSID   "jouw-wifi-naam"
-   #define SECRET_WIFI_PASS   "jouw-wifi-wachtwoord"
-   #define SECRET_MQTT_SERVER "192.168.x.y"     // Pi IP on your LAN
-   #define SECRET_MQTT_PORT   1883
-   #define SECRET_STATION_ID  2                 // 2 = first ESP32, 3 = second, etc.
+   #define DEVICE_STATION_ID  2                  // 2 = first ESP32
+   #define DEVICE_WIFI_SSID   "jouw-wifi"
+   #define DEVICE_WIFI_PASS   "jouw-wachtwoord"
+   #define DEVICE_MQTT_SERVER "192.168.x.y"      // Pi IP
+   #define DEVICE_MQTT_PORT   1883
    ```
-   (Station 1 is the Raspberry Pi, so ESP32s start at 2.)
 
 4. In Arduino IDE: **File → Open** → navigate to
    `sourdough-research/esp32/src/src.ino` and open it.
 
-5. Install the required libraries via *Tools → Manage Libraries*:
+5. Install the required libraries via **Tools → Manage Libraries**:
    - `PubSubClient` by Nick O'Leary
    - `ArduinoJson` by Benoit Blanchon
    - `Sensirion I2C SCD4x`
@@ -59,31 +56,47 @@ happy because it sees `src.ino`.
    - `DallasTemperature` by Miles Burton
    - `SparkFun VL53L5CX Arduino Library`
 
-6. Select board: **Tools → Board → ESP32 → ESP32 Dev Module**,
-   pick the right **Port**, then click **Upload** (→ arrow button).
-
-That's it. You're set up.
+6. **Tools → Board → ESP32 → ESP32 Dev Module**, pick the **Port**,
+   click **Upload**.
 
 ### Every time there's an update
 
-In a terminal:
 ```bash
 cd ~/Documents/GitHub/sourdough-research
 git pull
 ```
 
-Then in Arduino IDE, click **Upload** again. Done.
+Back in Arduino IDE, click **Upload** again. Done.
 
 - `main.cpp` updates via `git pull`
-- `secrets.h` stays untouched (gitignored)
-- You never copy-paste anything
+- `device_config.h` stays untouched (gitignored)
+- Zero copy-pasting, zero merge drama
 
-### Flashing a second (or third) ESP32
+### Flashing a second/third ESP32
 
-Only `secrets.h` differs between devices. Either:
-- Edit `SECRET_STATION_ID` in the same `secrets.h`, flash, then change it back, or
-- Keep per-device copies: `secrets.h.station2`, `secrets.h.station3`, and
-  symlink/rename the one you need before flashing.
+Only **one line** needs to change per device — `DEVICE_STATION_ID`:
+
+```c
+#define DEVICE_STATION_ID  3    // was 2 for the first device
+```
+
+Flip the line, flash, flip it back if you want. All other settings
+(WiFi, MQTT) stay the same across devices.
+
+---
+
+## Migrating from the old `secrets.h` name
+
+If you already had `esp32/src/secrets.h` from an earlier version,
+just rename it and replace the macro prefix:
+
+```bash
+mv esp32/src/secrets.h esp32/src/device_config.h
+```
+
+Then in `device_config.h`, replace `SECRET_` with `DEVICE_` on every
+line (five occurrences). Both filenames stay gitignored so nothing
+can leak.
 
 ---
 
@@ -93,10 +106,10 @@ Same repo works with PlatformIO out of the box:
 
 ```bash
 cd ~/Documents/GitHub/sourdough-research/esp32
-cp src/secrets.h.example src/secrets.h
-# edit src/secrets.h
+cp src/device_config.h.example src/device_config.h
+# edit src/device_config.h
 pio run -t upload
 ```
 
-`.ino` files are compiled by PlatformIO just like `.cpp`, so `src.ino`
-sitting next to `main.cpp` doesn't cause problems.
+`.ino` files sitting next to `.cpp` files are compiled normally by
+the Arduino framework — both toolchains see the same source.

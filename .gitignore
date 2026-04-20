@@ -22,8 +22,9 @@ build/
 .env.*
 !.env.example
 
-# ESP32 per-device credentials (WiFi, MQTT, station id)
-esp32/src/secrets.h
+# ESP32 per-device config (WiFi, MQTT, station id)
+esp32/src/device_config.h
+esp32/src/secrets.h       # old name, kept for backward compat
 
 # OS
 .DS_Store

@@ -1,0 +1,29 @@
+// Per-device configuration.
+//
+// This file holds everything that differs between your ESP32 stations:
+// WiFi credentials, MQTT broker address, and the station ID. It's
+// gitignored so `git pull` never touches it — you edit it once per
+// device and forget about it.
+//
+// First-time setup:
+//   cp esp32/src/device_config.h.example esp32/src/device_config.h
+//   edit esp32/src/device_config.h
+//
+// After that, just `git pull` — device_config.h stays untouched.
+
+#pragma once
+
+// ---------- Station identity (NOT secret, just per-device) ------------------
+// Each physical ESP32 gets a unique ID matching your Supabase stations table.
+// Station 1 = Raspberry Pi, so ESP32s start at 2, 3, 4, ...
+// When you flash a second/third ESP32, only this line needs to change.
+#define DEVICE_STATION_ID  2
+
+// ---------- WiFi (secret) ---------------------------------------------------
+#define DEVICE_WIFI_SSID   "your-wifi-ssid"
+#define DEVICE_WIFI_PASS   "your-wifi-password"
+
+// ---------- MQTT broker -----------------------------------------------------
+// The Pi's IP address on your LAN, or an mqtt hostname.
+#define DEVICE_MQTT_SERVER "192.168.1.10"
+#define DEVICE_MQTT_PORT   1883
