@@ -8,6 +8,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <SparkFun_VL53L5CX_Library.h>
+#include "esp_task_wdt.h"
 
 #ifndef STATION_ID
 #define STATION_ID 2
@@ -380,9 +381,17 @@ void setup() {
   connectMqtt();
 
   Serial.println("[setup] complete");
+
+  // Enable watchdog only after WiFi + NTP + MQTT are up. If the loop hangs
+  // for >60s without resetting it, the ESP32 hard-resets.
+  esp_task_wdt_init(60, true);
+  esp_task_wdt_add(NULL);
+  Serial.println("[wdt] watchdog started (60s)");
 }
 
 void loop() {
+  esp_task_wdt_reset();
+
   if (WiFi.status() != WL_CONNECTED) connectWifi();
   if (!mqtt.connected()) connectMqtt();
   mqtt.loop();
@@ -390,11 +399,32 @@ void loop() {
   time_t now;
   time(&now);
 
+  uint32_t nowMs = millis();
+  static uint32_t lastMeasurementMs = 0;
+  static uint32_t lastNtpSyncMs = 0;
+
   // NTP-aligned interval: fire when epoch crosses a boundary.
   time_t aligned = (now / INTERVAL_SEC) * INTERVAL_SEC;
   if (aligned != lastMeasurementEpoch && now >= aligned) {
     lastMeasurementEpoch = aligned;
     publishMeasurement(aligned);
+    lastMeasurementMs = nowMs;
+  }
+
+  // Fallback: if no measurement published for >10 minutes (NTP drifted or
+  // alignment got stuck), force-publish so the station doesn't go silent.
+  if (lastMeasurementMs == 0) lastMeasurementMs = nowMs;
+  if (nowMs - lastMeasurementMs > 10UL * 60UL * 1000UL) {
+    Serial.println("[fallback] no measurement for 10min, forcing publish");
+    publishMeasurement(now > 0 ? now : (time_t)(nowMs / 1000));
+    lastMeasurementMs = nowMs;
+  }
+
+  // Periodic NTP resync to prevent long-term clock drift.
+  if (nowMs - lastNtpSyncMs > 6UL * 60UL * 60UL * 1000UL) {
+    lastNtpSyncMs = nowMs;
+    configTime(GMT_OFFSET, DST_OFFSET, NTP_SERVER);
+    Serial.println("[ntp] resynced");
   }
 
   uint32_t ms = millis();
