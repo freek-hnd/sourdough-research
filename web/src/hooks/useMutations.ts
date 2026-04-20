@@ -202,8 +202,12 @@ export function useSaveOutcome() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: {
-      item_id: string;
-      session_id: string | null;
+      // The "primary" item being baked — rating + photo attach only to it.
+      primary_item_id: string;
+      // All items that share this bake outcome (includes primary). An
+      // outcome row is inserted for each, so multiple doughs baked in
+      // the same session can be logged in one go.
+      items: Array<{ id: string; session_id: string | null }>;
       outcome: {
         loaf_weight_g: number | null;
         bake_temp_c: number | null;
@@ -215,30 +219,42 @@ export function useSaveOutcome() {
       rating: { rater_name: string; scores_json: Record<string, number>; notes: string | null } | null;
       photo_url: string | null;
     }) => {
+      // One outcome row per item — same values, different item_id.
+      const outcomeRows = input.items.map((it) => ({
+        item_id: it.id,
+        ...input.outcome,
+      }));
       const { error: oErr } = await supabase
         .from("outcomes")
-        .insert({ item_id: input.item_id, ...input.outcome });
+        .insert(outcomeRows);
       if (oErr) throw oErr;
 
+      // Rating + photo attach to the primary only — user tasted/photographed
+      // one representative loaf. If they want per-item ratings they can
+      // go to each item separately.
       if (input.rating) {
         const { error: rErr } = await supabase
           .from("ratings")
-          .insert({ item_id: input.item_id, ...input.rating });
+          .insert({ item_id: input.primary_item_id, ...input.rating });
         if (rErr) throw rErr;
       }
 
       if (input.photo_url) {
         const { error: pErr } = await supabase
           .from("photos")
-          .insert({ item_id: input.item_id, storage_url: input.photo_url });
+          .insert({ item_id: input.primary_item_id, storage_url: input.photo_url });
         if (pErr) throw pErr;
       }
 
-      if (input.session_id) {
+      // End any sessions for the baked items.
+      const sessionIdsToEnd = input.items
+        .map((it) => it.session_id)
+        .filter((id): id is string => id != null);
+      if (sessionIdsToEnd.length > 0) {
         const { error: sErr } = await supabase
           .from("sessions")
           .update({ ended_at: new Date().toISOString() })
-          .eq("id", input.session_id);
+          .in("id", sessionIdsToEnd);
         if (sErr) throw sErr;
       }
     },
