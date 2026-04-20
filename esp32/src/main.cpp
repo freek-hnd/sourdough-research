@@ -11,12 +11,34 @@
 #include "esp_task_wdt.h"
 
 // Per-device config (WiFi, MQTT broker, station ID).
-// Copy device_config.h.example to device_config.h and fill in.
-// device_config.h is gitignored so your settings survive `git pull`.
+// Preferred: device_config.h (copy from device_config.h.example).
+// Also accepted: the older secrets.h name, for people who haven't
+// migrated yet. device_config.h wins if both exist.
 #if __has_include("device_config.h")
   #include "device_config.h"
+#elif __has_include("secrets.h")
+  #include "secrets.h"
 #else
   #error "Missing device_config.h — copy device_config.h.example to device_config.h and edit it."
+#endif
+
+// Backward-compat shims: if the config file still uses the old SECRET_*
+// prefix (from before the rename to DEVICE_*), map them through so the
+// rest of the code can use DEVICE_* uniformly.
+#if !defined(DEVICE_WIFI_SSID)   && defined(SECRET_WIFI_SSID)
+  #define DEVICE_WIFI_SSID   SECRET_WIFI_SSID
+#endif
+#if !defined(DEVICE_WIFI_PASS)   && defined(SECRET_WIFI_PASS)
+  #define DEVICE_WIFI_PASS   SECRET_WIFI_PASS
+#endif
+#if !defined(DEVICE_MQTT_SERVER) && defined(SECRET_MQTT_SERVER)
+  #define DEVICE_MQTT_SERVER SECRET_MQTT_SERVER
+#endif
+#if !defined(DEVICE_MQTT_PORT)   && defined(SECRET_MQTT_PORT)
+  #define DEVICE_MQTT_PORT   SECRET_MQTT_PORT
+#endif
+#if !defined(DEVICE_STATION_ID)  && defined(SECRET_STATION_ID)
+  #define DEVICE_STATION_ID  SECRET_STATION_ID
 #endif
 
 // STATION_ID may also be supplied via -DSTATION_ID=N (platformio build flag)
@@ -535,7 +557,22 @@ void setup() {
 
   // Enable watchdog only after WiFi + NTP + MQTT are up. If the loop hangs
   // for >60s without resetting it, the ESP32 hard-resets.
+  //
+  // ESP32 Arduino core 3.x (ESP-IDF 5.x) changed the API from
+  //   esp_task_wdt_init(timeout, panic)
+  // to
+  //   esp_task_wdt_init(const esp_task_wdt_config_t*)
+  // We pick the right one at compile time based on the core version.
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms     = 60000,
+    .idle_core_mask = 0,
+    .trigger_panic  = true,
+  };
+  esp_task_wdt_init(&wdt_config);
+#else
   esp_task_wdt_init(60, true);
+#endif
   esp_task_wdt_add(NULL);
   Serial.println("[wdt] watchdog started (60s)");
 
