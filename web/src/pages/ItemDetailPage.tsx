@@ -19,7 +19,7 @@ import {
   useItemEvents,
   useLatestMeasurement,
 } from "@/hooks/useItem";
-import { useLogEvent, useDeleteEvent, useRetireStarter } from "@/hooks/useMutations";
+import { useLogEvent, useDeleteEvent, useRetireStarter, useEndSession } from "@/hooks/useMutations";
 import { formatElapsed, formatTime } from "@/lib/utils";
 import { Trash2, RefreshCw, Archive } from "lucide-react";
 
@@ -42,6 +42,7 @@ export function ItemDetailPage() {
   const logEvent = useLogEvent();
   const deleteEvent = useDeleteEvent();
   const retireStarter = useRetireStarter();
+  const endSession = useEndSession();
   const [note, setNote] = useState("");
   const [sheetOpen, setSheetOpen] = useState(false);
   const undoTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -149,6 +150,43 @@ export function ItemDetailPage() {
             <Stat label="Weight" value={measurement?.load_cell_g} unit="g" />
           </CardContent>
         </Card>
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          variant="outline"
+          className="h-14 border-emerald-500 text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950"
+          onClick={() => fire("measurement_start")}
+        >▶ Start measuring</Button>
+        <Button
+          variant="outline"
+          className="h-14 border-rose-500 text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950"
+          onClick={() => fire("measurement_stop")}
+        >⏹ Stop measuring</Button>
+      </div>
+
+      {session && (
+        <Button
+          variant="outline"
+          className="h-12 w-full border-destructive text-destructive hover:bg-destructive/10"
+          onClick={() => {
+            // Log event markers, then end the session
+            logEvent.mutate({
+              event_name: "measurement_stop",
+              session_id: session.id,
+              station_id: item.station_id ?? null,
+            });
+            logEvent.mutate({
+              event_name: "session_end",
+              session_id: session.id,
+              station_id: item.station_id ?? null,
+            });
+            endSession.mutate(session.id, {
+              onSuccess: () => toast.success("Session ended"),
+              onError: (err) => toast.error((err as Error).message),
+            });
+          }}
+        >⏹ End session</Button>
       )}
 
       <div className="grid grid-cols-3 gap-2">
