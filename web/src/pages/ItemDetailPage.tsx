@@ -20,6 +20,7 @@ import {
   useLatestMeasurement,
 } from "@/hooks/useItem";
 import { useLogEvent, useDeleteEvent, useRetireStarter, useEndSession } from "@/hooks/useMutations";
+import { StationStatusDot } from "@/components/StationStatus";
 import { formatElapsed, formatTime } from "@/lib/utils";
 import { Trash2, RefreshCw, Archive } from "lucide-react";
 
@@ -100,7 +101,12 @@ export function ItemDetailPage() {
           <div className="flex gap-2">
             <Badge variant="secondary">{item.type}</Badge>
             {item.generation > 0 && <Badge variant="outline">Gen {item.generation}</Badge>}
-            {item.station_id && <Badge>Station {item.station_id}</Badge>}
+            {item.station_id && (
+              <span className="inline-flex items-center gap-1.5">
+                <StationStatusDot stationId={item.station_id} />
+                <Badge>Station {item.station_id}</Badge>
+              </span>
+            )}
           </div>
         </div>
         {starterName && (

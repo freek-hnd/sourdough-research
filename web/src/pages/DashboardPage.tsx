@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { useActiveItems } from "@/hooks/useActiveItems";
 import { useRecentEvents } from "@/hooks/useRecentEvents";
+import { StationStatusDot } from "@/components/StationStatus";
 import { formatElapsed, formatTime } from "@/lib/utils";
 
 export function DashboardPage() {
@@ -64,7 +65,14 @@ export function DashboardPage() {
                         <td className="px-4 py-2 text-muted-foreground">
                           {weight != null ? `${Math.round(weight)} g` : "—"}
                         </td>
-                        <td className="px-4 py-2">{station ? <Badge>Station {station.id}</Badge> : "—"}</td>
+                        <td className="px-4 py-2">
+                          {station ? (
+                            <span className="inline-flex items-center gap-1.5">
+                              <StationStatusDot stationId={station.id} />
+                              <Badge>Station {station.id}</Badge>
+                            </span>
+                          ) : "—"}
+                        </td>
                       </tr>
                     );
                   })}
