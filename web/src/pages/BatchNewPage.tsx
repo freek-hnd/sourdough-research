@@ -17,9 +17,11 @@ import { toast } from "sonner";
 import { useStations } from "@/hooks/useStations";
 import { useCreateBatch } from "@/hooks/useMutations";
 import { StarterPicker } from "@/components/StarterPicker";
+import { Minus, Plus } from "lucide-react";
 import { formatElapsed, generateShortId } from "@/lib/utils";
 
 type Mode = "choose" | "dough" | "starter";
+type SaveableMode = "dough" | "starter";
 
 interface Child {
   weight_g: number;
@@ -28,7 +30,14 @@ interface Child {
   inkbird_probe: number | null;
 }
 
-const WIZARD_STORAGE_KEY = "sourdough_batch_wizard";
+// One storage slot per flow so you can have a dough in progress AND a
+// starter refresh in progress at the same time without one overwriting
+// the other. Legacy key is migrated on load.
+const LEGACY_STORAGE_KEY = "sourdough_batch_wizard";
+const STORAGE_KEYS: Record<SaveableMode, string> = {
+  dough:   "sourdough_batch_wizard_dough",
+  starter: "sourdough_batch_wizard_starter",
+};
 
 interface WizardState {
   mode: Mode;
@@ -50,76 +59,128 @@ interface WizardState {
   notes: string;
 }
 
-function loadWizardState(): Partial<WizardState> | null {
+function loadWizardState(mode: SaveableMode): Partial<WizardState> | null {
   try {
-    const raw = localStorage.getItem(WIZARD_STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as Partial<WizardState>;
+    const raw = localStorage.getItem(STORAGE_KEYS[mode]);
+    if (raw) return JSON.parse(raw) as Partial<WizardState>;
+    // One-time migration: if we only have the legacy single-key save
+    // and its mode matches the requested mode, use it.
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacy) {
+      const parsed = JSON.parse(legacy) as Partial<WizardState>;
+      if (parsed.mode === mode) {
+        localStorage.setItem(STORAGE_KEYS[mode], legacy);
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+        return parsed;
+      }
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
-function clearWizardState() {
-  localStorage.removeItem(WIZARD_STORAGE_KEY);
+function clearWizardState(mode: SaveableMode) {
+  localStorage.removeItem(STORAGE_KEYS[mode]);
+  // Also clear the legacy key if it was for this mode, so the user
+  // doesn't see a ghost resume banner after discarding.
+  try {
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacy) {
+      const parsed = JSON.parse(legacy) as Partial<WizardState>;
+      if (parsed.mode === mode) localStorage.removeItem(LEGACY_STORAGE_KEY);
+    }
+  } catch { /* ignore */ }
 }
 
 export function BatchNewPage() {
   const nav = useNavigate();
   const [searchParams] = useSearchParams();
-  const saved = loadWizardState();
 
-  const [mode, setMode] = useState<Mode>(saved?.mode ?? "choose");
-  const [step, setStep] = useState(saved?.step ?? 1);
+  // Initial mode: ?resume=dough|starter picks the right saved slot on load.
+  // Otherwise start at the choose screen so the user can see BOTH in-progress
+  // flows and decide which to work on.
+  const resumeParam = searchParams.get("resume");
+  const parentParam = searchParams.get("parent");
+  const initialMode: Mode =
+    resumeParam === "dough" || resumeParam === "starter"
+      ? resumeParam
+      : parentParam
+      ? "starter"
+      : "choose";
+  // Parent deep link always starts a fresh starter flow so the picker
+  // opens cleanly; otherwise restore from the per-mode slot if any.
+  const initial: Partial<WizardState> | null =
+    initialMode === "choose" || parentParam ? null : loadWizardState(initialMode);
 
-  const [rootStarterId, setRootStarterId] = useState(saved?.rootStarterId ?? "");
-  const [parentItemId, setParentItemId] = useState<string | null>(saved?.parentItemId ?? null);
-  const [parentGeneration, setParentGeneration] = useState(saved?.parentGeneration ?? 0);
-  const [parentLabel, setParentLabel] = useState(saved?.parentLabel ?? "");
-  const [flour, setFlour] = useState(saved?.flour ?? "");
-  const [water, setWater] = useState(saved?.water ?? "");
-  const [starterG, setStarterG] = useState(saved?.starterG ?? "");
-  const [salt, setSalt] = useState(saved?.salt ?? "");
-  const [extras, setExtras] = useState(saved?.extras ?? "");
-  const [containerType, setContainerType] = useState(saved?.containerType ?? "default");
-  const [mixedAt, setMixedAt] = useState<string>(saved?.mixedAt ?? "");
-  const [numChildren, setNumChildren] = useState(saved?.numChildren ?? 3);
-  const [children, setChildren] = useState<Child[]>(saved?.children ?? []);
-  const [stationId, setStationId] = useState<number | null>(saved?.stationId ?? null);
-  const [notes, setNotes] = useState(saved?.notes ?? "");
+  const [mode, setMode] = useState<Mode>(initialMode);
+  const [step, setStep] = useState(initial?.step ?? 1);
 
-  // Handle ?parent=<itemId> deep link
-  useEffect(() => {
-    const parentParam = searchParams.get("parent");
-    if (parentParam && mode === "choose") {
-      // Pre-select starter mode — the StarterPicker will resolve the item details
-      setMode("starter");
-      setStep(1);
-      setContainerType("jar-starter");
-    }
-  }, [searchParams, mode]);
+  const [rootStarterId, setRootStarterId] = useState(initial?.rootStarterId ?? "");
+  const [parentItemId, setParentItemId] = useState<string | null>(initial?.parentItemId ?? null);
+  const [parentGeneration, setParentGeneration] = useState(initial?.parentGeneration ?? 0);
+  const [parentLabel, setParentLabel] = useState(initial?.parentLabel ?? "");
+  const [flour, setFlour] = useState(initial?.flour ?? "");
+  const [water, setWater] = useState(initial?.water ?? "");
+  const [starterG, setStarterG] = useState(initial?.starterG ?? "");
+  const [salt, setSalt] = useState(initial?.salt ?? "");
+  const [extras, setExtras] = useState(initial?.extras ?? "");
+  const [containerType, setContainerType] = useState(
+    initial?.containerType ?? (initialMode === "starter" ? "jar-starter" : "default"),
+  );
+  const [mixedAt, setMixedAt] = useState<string>(initial?.mixedAt ?? "");
+  const [numChildren, setNumChildren] = useState(initial?.numChildren ?? 3);
+  const [children, setChildren] = useState<Child[]>(initial?.children ?? []);
+  const [stationId, setStationId] = useState<number | null>(initial?.stationId ?? null);
+  const [notes, setNotes] = useState(initial?.notes ?? "");
 
   const { data: stations = [] } = useStations();
   const createBatch = useCreateBatch();
 
-  // Persist wizard state to localStorage on every change
+  // Apply a saved state (or defaults) to all the individual fields. Used
+  // when switching modes from the choose screen so you don't see stale
+  // fields from a previous session.
+  const applyState = useCallback((newMode: SaveableMode, s: Partial<WizardState> | null) => {
+    setStep(s?.step ?? 1);
+    setRootStarterId(s?.rootStarterId ?? "");
+    setParentItemId(s?.parentItemId ?? null);
+    setParentGeneration(s?.parentGeneration ?? 0);
+    setParentLabel(s?.parentLabel ?? "");
+    setFlour(s?.flour ?? "");
+    setWater(s?.water ?? "");
+    setStarterG(s?.starterG ?? "");
+    setSalt(s?.salt ?? "");
+    setExtras(s?.extras ?? "");
+    setContainerType(s?.containerType ?? (newMode === "starter" ? "jar-starter" : "default"));
+    setMixedAt(s?.mixedAt ?? "");
+    setNumChildren(s?.numChildren ?? 3);
+    setChildren(s?.children ?? []);
+    setStationId(s?.stationId ?? null);
+    setNotes(s?.notes ?? "");
+  }, []);
+
+  const pickMode = useCallback((newMode: SaveableMode) => {
+    const s = loadWizardState(newMode);
+    applyState(newMode, s);
+    setMode(newMode);
+  }, [applyState]);
+
+  // Persist wizard state to the slot that matches the current mode.
+  // When mode === "choose" we don't touch storage.
   useEffect(() => {
-    if (mode === "choose") {
-      clearWizardState();
-      return;
-    }
+    if (mode === "choose") return;
     const state: WizardState = {
       mode, step, rootStarterId, parentItemId, parentGeneration, parentLabel,
       flour, water, starterG, salt, extras, containerType, mixedAt,
       numChildren, children, stationId, notes,
     };
-    localStorage.setItem(WIZARD_STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEYS[mode], JSON.stringify(state));
   }, [mode, step, rootStarterId, parentItemId, parentGeneration, parentLabel,
       flour, water, starterG, salt, extras, containerType, mixedAt,
       numChildren, children, stationId, notes]);
 
   const reset = useCallback(() => {
-    clearWizardState();
+    if (mode === "dough" || mode === "starter") clearWizardState(mode);
     setMode("choose");
     setStep(1);
     setRootStarterId("");
@@ -137,36 +198,41 @@ export function BatchNewPage() {
     setChildren([]);
     setStationId(null);
     setNotes("");
-  }, []);
+  }, [mode]);
 
   if (mode === "choose") {
+    const doughInProgress = loadWizardState("dough");
+    const starterInProgress = loadWizardState("starter");
     return (
       <div className="space-y-4 p-4">
         <h1 className="text-lg font-semibold">Start new batch</h1>
         <div className="grid gap-3">
           <Card
-            className="cursor-pointer hover:bg-accent/50"
-            onClick={() => {
-              setMode("dough");
-              setStep(1);
-            }}
+            className={`cursor-pointer hover:bg-accent/50 ${doughInProgress ? "border-amber-500" : ""}`}
+            onClick={() => pickMode("dough")}
           >
             <CardContent className="p-6 text-center">
               <div className="text-xl font-semibold">🍞 Dough</div>
               <div className="text-sm text-muted-foreground">Pre-dough → final mix → divide</div>
+              {doughInProgress && (
+                <div className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                  In progress — step {doughInProgress.step}/5
+                </div>
+              )}
             </CardContent>
           </Card>
           <Card
-            className="cursor-pointer hover:bg-accent/50"
-            onClick={() => {
-              setMode("starter");
-              setContainerType("jar-starter");
-              setStep(1);
-            }}
+            className={`cursor-pointer hover:bg-accent/50 ${starterInProgress ? "border-amber-500" : ""}`}
+            onClick={() => pickMode("starter")}
           >
             <CardContent className="p-6 text-center">
               <div className="text-xl font-semibold">🌾 Starter refresh</div>
               <div className="text-sm text-muted-foreground">Feed one starter</div>
+              {starterInProgress && (
+                <div className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                  In progress — step {starterInProgress.step}/2
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -332,7 +398,7 @@ export function BatchNewPage() {
                   notes: null,
                   children: childrenPayload,
                 });
-                clearWizardState();
+                clearWizardState("starter");
                 toast.success(starterNumChildren > 1 ? `Split into ${starterNumChildren} jars` : "Starter refreshed");
                 nav("/");
               } catch (e) {
@@ -446,6 +512,7 @@ export function BatchNewPage() {
           <div className="text-sm text-muted-foreground">Total: {totalG} g</div>
           <div>
             <Label>Number of balls</Label>
+            {/* Quick pick for the common case */}
             <div className="mt-2 flex gap-2">
               {[2, 3, 4, 5].map((n) => (
                 <Button
@@ -455,6 +522,39 @@ export function BatchNewPage() {
                   onClick={() => { setNumChildren(n); setChildren(ensureChildren(n)); }}
                 >{n}</Button>
               ))}
+            </div>
+            {/* +/- controls for 6-15 — tap-friendly with floury hands */}
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">or more:</span>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-12 w-12"
+                disabled={numChildren <= 2}
+                onClick={() => {
+                  const n = Math.max(2, numChildren - 1);
+                  setNumChildren(n);
+                  setChildren(ensureChildren(n));
+                }}
+              ><Minus className="size-4" /></Button>
+              <div
+                className={`flex-1 text-center font-mono text-lg ${
+                  numChildren > 5 ? "font-bold" : "text-muted-foreground"
+                }`}
+              >
+                {numChildren > 5 ? numChildren : "—"}
+              </div>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-12 w-12"
+                disabled={numChildren >= 15}
+                onClick={() => {
+                  const n = Math.min(15, Math.max(6, numChildren + 1));
+                  setNumChildren(n);
+                  setChildren(ensureChildren(n));
+                }}
+              ><Plus className="size-4" /></Button>
             </div>
           </div>
           <div className="space-y-2">
@@ -561,7 +661,7 @@ export function BatchNewPage() {
                     inkbird_probe: c.inkbird_probe,
                   })),
                 });
-                clearWizardState();
+                clearWizardState("dough");
                 toast.success(`Batch created — ${children.length} items`);
                 nav("/");
               } catch (e) {
