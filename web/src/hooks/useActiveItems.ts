@@ -16,6 +16,7 @@ export function useActiveItems() {
       const { data: items, error } = await supabase
         .from("items")
         .select("*, batch:batches!items_batch_id_fkey(*, root_starter:root_starters(*)), station:stations(*)")
+        .is("retired_at", null)
         .order("created_at", { ascending: false })
         .limit(50);
       if (error) throw error;

@@ -8,6 +8,7 @@ export function useRecentEvents(limit = 10) {
       const { data, error } = await supabase
         .from("events")
         .select("*")
+        .neq("event_name", "heartbeat")
         .order("occurred_at", { ascending: false })
         .limit(limit);
       if (error) throw error;
