@@ -10,8 +10,18 @@
 #include <SparkFun_VL53L5CX_Library.h>
 #include "esp_task_wdt.h"
 
+// Per-device credentials. Copy secrets.h.example to secrets.h and fill in.
+// secrets.h is gitignored so it stays out of the repo.
+#if __has_include("secrets.h")
+  #include "secrets.h"
+#else
+  #error "Missing secrets.h — copy secrets.h.example to secrets.h and edit it."
+#endif
+
+// STATION_ID may also be supplied via -DSTATION_ID=N (platformio build flag)
+// to override what's in secrets.h; otherwise fall back to secrets.h value.
 #ifndef STATION_ID
-#define STATION_ID 2
+#define STATION_ID SECRET_STATION_ID
 #endif
 #ifndef INTERVAL_SEC
 #define INTERVAL_SEC 300
@@ -22,10 +32,10 @@
 #define I2C_SCL 22
 #define ONE_WIRE_BUS 4
 
-static const char* WIFI_SSID   = "CHANGE_ME";
-static const char* WIFI_PASS   = "CHANGE_ME";
-static const char* MQTT_SERVER = "192.168.1.10";
-static const uint16_t MQTT_PORT = 1883;
+static const char* WIFI_SSID   = SECRET_WIFI_SSID;
+static const char* WIFI_PASS   = SECRET_WIFI_PASS;
+static const char* MQTT_SERVER = SECRET_MQTT_SERVER;
+static const uint16_t MQTT_PORT = SECRET_MQTT_PORT;
 
 static const char* NTP_SERVER  = "pool.ntp.org";
 static const long  GMT_OFFSET  = 0;

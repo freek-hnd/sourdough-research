@@ -22,6 +22,9 @@ build/
 .env.*
 !.env.example
 
+# ESP32 per-device credentials (WiFi, MQTT, station id)
+esp32/src/secrets.h
+
 # OS
 .DS_Store
 Thumbs.db
