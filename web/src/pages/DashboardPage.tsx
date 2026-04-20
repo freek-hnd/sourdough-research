@@ -8,6 +8,7 @@ import { useActiveItems } from "@/hooks/useActiveItems";
 import { useRecentEvents } from "@/hooks/useRecentEvents";
 import { StationStatusDot } from "@/components/StationStatus";
 import { AnomalyBanner } from "@/components/AnomalyBanner";
+import { BatchResumeBanner } from "@/components/BatchResumeBanner";
 import { formatElapsed, formatTime } from "@/lib/utils";
 
 export function DashboardPage() {
@@ -17,6 +18,8 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6 p-4">
+      <BatchResumeBanner />
+
       <Link to="/batch/new" className="block">
         <Button size="lg" className="h-14 w-full text-base">
           + New Batch
