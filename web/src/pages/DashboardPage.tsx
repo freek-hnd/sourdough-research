@@ -40,6 +40,7 @@ export function DashboardPage() {
                     <th className="px-4 py-2 font-medium">Item</th>
                     <th className="px-4 py-2 font-medium">Running</th>
                     <th className="px-4 py-2 font-medium">Type</th>
+                    <th className="px-4 py-2 font-medium">Weight</th>
                     <th className="px-4 py-2 font-medium">Station</th>
                   </tr>
                 </thead>
@@ -47,6 +48,8 @@ export function DashboardPage() {
                   {activeItems.map((item) => {
                     const station = item.station as { id: number; label: string } | null;
                     const session = (item as Record<string, unknown>).session as { started_at: string } | null;
+                    const batch = item.batch as { total_weight_g?: number } | null;
+                    const weight = batch?.total_weight_g;
                     return (
                       <tr
                         key={item.id}
@@ -58,6 +61,9 @@ export function DashboardPage() {
                           {session ? formatElapsed(session.started_at) : `${formatElapsed(item.created_at)} ago`}
                         </td>
                         <td className="px-4 py-2"><Badge variant="secondary">{item.type}</Badge></td>
+                        <td className="px-4 py-2 text-muted-foreground">
+                          {weight != null ? `${Math.round(weight)} g` : "—"}
+                        </td>
                         <td className="px-4 py-2">{station ? <Badge>Station {station.id}</Badge> : "—"}</td>
                       </tr>
                     );

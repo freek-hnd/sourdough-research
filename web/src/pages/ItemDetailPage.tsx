@@ -48,8 +48,13 @@ export function ItemDetailPage() {
 
   if (isLoading || !item) return <div className="p-4"><Skeleton className="h-32 w-full" /></div>;
 
-  const batch = item.batch as { root_starter?: { name: string } | null; parent_item_id?: string | null } | null;
+  const batch = item.batch as {
+    root_starter?: { name: string } | null;
+    parent_item_id?: string | null;
+    total_weight_g?: number;
+  } | null;
   const starterName = batch?.root_starter?.name;
+  const batchWeight = batch?.total_weight_g;
   const isActiveStarter = item.type === "starter" && !item.retired_at;
 
   function fire(name: string) {
@@ -99,6 +104,9 @@ export function ItemDetailPage() {
         </div>
         {starterName && (
           <p className="text-sm text-muted-foreground">{starterName}</p>
+        )}
+        {batchWeight != null && (
+          <p className="text-sm text-muted-foreground">Batch weight: {Math.round(batchWeight)} g</p>
         )}
         {item.retired_at && (
           <p className="text-sm text-destructive">Retired</p>
