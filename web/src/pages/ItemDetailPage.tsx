@@ -149,14 +149,19 @@ export function ItemDetailPage() {
       )}
 
       {item.station_id && (
-        <Card>
-          <CardContent className="grid grid-cols-4 gap-2 p-4 text-center">
-            <Stat label="CO₂" value={measurement?.co2_ppm} unit="ppm" />
-            <Stat label="Temp" value={measurement?.scd_temp_c ?? measurement?.ds18b20_temp_c} unit="°C" />
-            <Stat label="Height" value={measurement?.tof_median_mm} unit="mm" />
-            <Stat label="Weight" value={measurement?.load_cell_g} unit="g" />
-          </CardContent>
-        </Card>
+        <>
+          <Card>
+            <CardContent className="grid grid-cols-4 gap-2 p-4 text-center">
+              <Stat label="CO₂" value={measurement?.co2_ppm} unit="ppm" />
+              <Stat label="Temp" value={measurement?.scd_temp_c ?? measurement?.ds18b20_temp_c} unit="°C" />
+              <Stat label="Height" value={measurement?.tof_median_mm} unit="mm" />
+              <Stat label="Weight" value={measurement?.load_cell_g} unit="g" />
+            </CardContent>
+          </Card>
+          <Link to={`/item/${item.short_id}/plot`} className="block">
+            <Button variant="outline" className="h-12 w-full">📈 View plots</Button>
+          </Link>
+        </>
       )}
 
       {measurement?.tof_grid && Array.isArray(measurement.tof_grid) && (

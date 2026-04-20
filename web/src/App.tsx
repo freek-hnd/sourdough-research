@@ -3,6 +3,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { BatchNewPage } from "@/pages/BatchNewPage";
 import { ItemDetailPage } from "@/pages/ItemDetailPage";
+import { ItemPlotPage } from "@/pages/ItemPlotPage";
 import { OutcomePage } from "@/pages/OutcomePage";
 import { StartersPage } from "@/pages/StartersPage";
 import { StarterDetailPage } from "@/pages/StarterDetailPage";
@@ -19,6 +20,7 @@ export default function App() {
           <Route index element={<DashboardPage />} />
           <Route path="/batch/new" element={<BatchNewPage />} />
           <Route path="/item/:shortId" element={<ItemDetailPage />} />
+          <Route path="/item/:shortId/plot" element={<ItemPlotPage />} />
           <Route path="/outcome/:shortId" element={<OutcomePage />} />
           <Route path="/starters" element={<StartersPage />} />
           <Route path="/starters/:id" element={<StarterDetailPage />} />
