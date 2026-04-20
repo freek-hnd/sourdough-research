@@ -31,8 +31,11 @@ const QUICK_ACTIONS = [
   { name: "temp_check", label: "🌡️ Temp" },
   { name: "to_fridge", label: "❄️ → Fridge" },
   { name: "from_fridge", label: "☀️ ← Fridge" },
-  { name: "ph_start", label: "🧪 pH start" },
 ];
+
+// The Hanna pH meter lives on the Pi (station 1), so connect/disconnect
+// events must target that station — regardless of the item's own station.
+const HANNA_STATION_ID = 1;
 
 export function ItemDetailPage() {
   const { shortId } = useParams<{ shortId: string }>();
@@ -260,6 +263,59 @@ export function ItemDetailPage() {
           </SheetContent>
         </Sheet>
       </div>
+
+      {/* pH meter controls (Hanna HI98103 lives on the Pi — station 1) */}
+      <Card>
+        <CardContent className="p-4 space-y-2">
+          <h2 className="text-sm font-medium text-muted-foreground">🧪 pH meter</h2>
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              variant="outline"
+              className="h-12"
+              onClick={() => {
+                logEvent.mutate(
+                  { event_name: "ph_start", session_id: session?.id ?? null, station_id: HANNA_STATION_ID },
+                  { onSuccess: () => toast.success("pH connect requested") },
+                );
+              }}
+            >🔗 Connect</Button>
+            <Button
+              variant="outline"
+              className="h-12"
+              onClick={() => {
+                logEvent.mutate(
+                  { event_name: "ph_stop", session_id: session?.id ?? null, station_id: HANNA_STATION_ID },
+                  { onSuccess: () => toast.success("pH disconnect requested") },
+                );
+              }}
+            >🔌 Disconnect</Button>
+            <Button
+              variant="outline"
+              className="h-12 border-emerald-500 text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950"
+              onClick={() => {
+                logEvent.mutate(
+                  { event_name: "ph_record_start", session_id: session?.id ?? null, station_id: HANNA_STATION_ID },
+                  { onSuccess: () => toast.success("pH recording started") },
+                );
+              }}
+            >▶ Start recording</Button>
+            <Button
+              variant="outline"
+              className="h-12 border-rose-500 text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950"
+              onClick={() => {
+                logEvent.mutate(
+                  { event_name: "ph_record_stop", session_id: session?.id ?? null, station_id: HANNA_STATION_ID },
+                  { onSuccess: () => toast.success("pH recording stopped") },
+                );
+              }}
+            >⏹ Stop recording</Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Connect/disconnect control the BLE link. Start/stop recording are
+            just timestamp markers for later analysis.
+          </p>
+        </CardContent>
+      </Card>
 
       <section>
         <h2 className="mb-2 text-sm font-medium text-muted-foreground">Event history</h2>

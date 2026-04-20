@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+import requests
 from bleak import BleakClient, BleakScanner
 
 import config
@@ -326,7 +327,12 @@ _manager: _HannaBLEManager | None = None
 
 
 def _poll_enable_events(conn, station_id: int):
-    """Check the events table for ph_start/ph_stop events to toggle the manager."""
+    """Check LOCAL events table for ph_start/ph_stop events.
+
+    Kept for local-origin events (e.g. RFID tags on the Pi). Web app
+    events go straight to Supabase and never sync back here, so they're
+    picked up via _poll_supabase_for_ph_events() below.
+    """
     if _manager is None:
         return
 
@@ -349,6 +355,52 @@ def _poll_enable_events(conn, station_id: int):
         log.debug("failed to poll ph enable events", exc_info=True)
 
 
+def _poll_supabase_for_ph_events(timeout: float = 10.0):
+    """Poll Supabase directly for the most recent ph_start/ph_stop event.
+
+    The Pi -> Supabase sync is one-way. Events inserted by the web app
+    (via the Supabase JS client) never reach the Pi's local SQLite, so
+    polling local_db alone means web-app pH buttons don't work. This
+    function asks Supabase directly via REST.
+
+    Only looks at events with station_id == STATION_ID (the Pi's own
+    station id). Web app pH buttons must set station_id=1 so they land
+    on this poll. Silent no-op if Supabase creds aren't configured.
+    """
+    if _manager is None or not config.sync_enabled():
+        return
+
+    try:
+        url = f"{config.SUPABASE_URL.rstrip('/')}/rest/v1/events"
+        params = {
+            "select": "event_name,occurred_at",
+            "event_name": "in.(ph_start,ph_stop)",
+            "station_id": f"eq.{config.STATION_ID}",
+            "order": "occurred_at.desc",
+            "limit": "1",
+        }
+        headers = {
+            "apikey": config.SUPABASE_KEY,
+            "Authorization": f"Bearer {config.SUPABASE_KEY}",
+        }
+        resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        rows = resp.json()
+        if not rows:
+            return
+
+        event_name = rows[0]["event_name"]
+        should_enable = event_name == "ph_start"
+        if should_enable != _manager.is_enabled():
+            log.info("supabase pH control: %s -> %s",
+                     event_name, "ON" if should_enable else "OFF")
+            _manager.set_enabled(should_enable)
+    except requests.RequestException as e:
+        log.debug("supabase pH poll network error: %s", e)
+    except Exception:
+        log.debug("failed to poll supabase for pH events", exc_info=True)
+
+
 def run(stop: threading.Event) -> None:
     global _manager
 
@@ -360,8 +412,12 @@ def run(stop: threading.Event) -> None:
 
     try:
         while not stop.wait(timeout=10.0):
-            # Poll events table for ph_start/ph_stop
+            # Two sources of pH control events:
+            #  1. Local SQLite (e.g. RFID tags on the Pi)
+            #  2. Supabase directly (web app -> Supabase; never syncs back)
+            # Whichever has the most recent ph_start/ph_stop wins per call.
             _poll_enable_events(conn, config.STATION_ID)
+            _poll_supabase_for_ph_events()
 
             # If we have a fresh measurement, write it to the DB
             if _manager is not None and _manager.is_enabled():
