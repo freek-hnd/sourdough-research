@@ -9,6 +9,7 @@ import { useRecentEvents } from "@/hooks/useRecentEvents";
 import { StationStatusDot } from "@/components/StationStatus";
 import { AnomalyBanner } from "@/components/AnomalyBanner";
 import { BatchResumeBanner } from "@/components/BatchResumeBanner";
+import { SessionsAttentionBanner } from "@/components/SessionsAttentionBanner";
 import { formatElapsed, formatTime } from "@/lib/utils";
 
 export function DashboardPage() {
@@ -27,6 +28,8 @@ export function DashboardPage() {
       </Link>
 
       <AnomalyBanner />
+
+      <SessionsAttentionBanner />
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium text-muted-foreground">Active items</h2>

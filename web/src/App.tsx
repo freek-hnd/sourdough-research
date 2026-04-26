@@ -9,6 +9,7 @@ import { StartersPage } from "@/pages/StartersPage";
 import { StarterDetailPage } from "@/pages/StarterDetailPage";
 import { StationsPage } from "@/pages/StationsPage";
 import { StationDetailPage } from "@/pages/StationDetailPage";
+import { SessionsPage } from "@/pages/SessionsPage";
 import MonitorPage from "@/pages/MonitorPage";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -26,6 +27,7 @@ export default function App() {
           <Route path="/starters/:id" element={<StarterDetailPage />} />
           <Route path="/stations" element={<StationsPage />} />
           <Route path="/stations/:id" element={<StationDetailPage />} />
+          <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/monitor" element={<MonitorPage />} />
         </Route>
       </Routes>

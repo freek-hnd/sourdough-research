@@ -37,6 +37,23 @@ export function useActiveSessionForItem(itemId: string | undefined) {
   });
 }
 
+export function useSessionEvents(sessionId: string | undefined) {
+  return useQuery({
+    queryKey: ["events", "by_session", sessionId],
+    enabled: !!sessionId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("events")
+        .select("*")
+        .eq("session_id", sessionId!)
+        .order("occurred_at", { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+    staleTime: 30_000,
+  });
+}
+
 export function useItemEvents(itemId: string | undefined) {
   return useQuery({
     queryKey: ["events", "by_item", itemId],

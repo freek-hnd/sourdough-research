@@ -1,11 +1,12 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { Home, Plus, Wheat, Radio } from "lucide-react";
+import { Home, Plus, Wheat, Radio, FlaskConical } from "lucide-react";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: Home },
   { to: "/batch/new", label: "New Batch", icon: Plus },
   { to: "/starters", label: "Starters", icon: Wheat },
+  { to: "/sessions", label: "Sessions", icon: FlaskConical },
   { to: "/stations", label: "Stations", icon: Radio },
 ];
 

@@ -266,6 +266,31 @@ export function ItemDetailPage() {
         </Sheet>
       </div>
 
+      {/* Station adjustment events — log when the rig was bumped or moved
+          so we can flag bad stretches of data later. */}
+      <Card>
+        <CardContent className="p-4 space-y-2">
+          <h2 className="text-sm font-medium text-muted-foreground">⚠ Station</h2>
+          <div className="grid grid-cols-3 gap-2">
+            <Button
+              variant="outline"
+              className="h-12 whitespace-normal text-xs border-amber-500 text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950"
+              onClick={() => fire("station_adjusted")}
+            >Adjusted</Button>
+            <Button
+              variant="outline"
+              className="h-12 whitespace-normal text-xs border-amber-500 text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950"
+              onClick={() => fire("station_adjusted_horizontal")}
+            >Moved horizontally</Button>
+            <Button
+              variant="outline"
+              className="h-12 whitespace-normal text-xs border-amber-500 text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950"
+              onClick={() => fire("station_adjusted_vertical")}
+            >Moved vertically</Button>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* pH meter controls (Hanna HI98103 lives on the Pi — station 1) */}
       <Card>
         <CardContent className="p-4 space-y-2">

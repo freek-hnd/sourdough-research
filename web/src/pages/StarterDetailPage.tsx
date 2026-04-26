@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { supabase } from "@/lib/supabase";
-import { SessionCharts } from "@/components/charts/SessionCharts";
+import { SessionPlots } from "@/components/SessionPlots";
 
 interface StarterSession {
   id: string;
@@ -113,10 +113,12 @@ export function StarterDetailPage() {
               </CardHeader>
               <CardContent>
                 {s.started_at ? (
-                  <SessionCharts
+                  <SessionPlots
                     stationId={s.station_id}
-                    startTime={s.started_at}
-                    endTime={s.ended_at ?? undefined}
+                    startedAt={s.started_at}
+                    endedAt={s.ended_at}
+                    sessionId={s.id}
+                    itemId={s.item_id}
                   />
                 ) : (
                   <p className="py-4 text-center text-sm text-muted-foreground">
