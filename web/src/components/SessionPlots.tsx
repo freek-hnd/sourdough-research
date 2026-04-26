@@ -9,7 +9,7 @@
  * events and overlays vertical reference lines on every chart.
  */
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -121,7 +121,49 @@ export function SessionPlots({
 
   const sessionStartMs = new Date(startedAt).getTime();
 
-  const chartData = useMemo(() => (rows ?? []), [rows]);
+  // Click-to-pin timestamp shared across all four charts AND the ToF
+  // 3D grid. Clicking any chart sets it; the ToF scrubber jumps to the
+  // matching frame; recharts' syncId="session" already syncs hover
+  // tooltips for free.
+  const [selectedTs, setSelectedTs] = useState<number | null>(null);
+
+  // Recharts onClick handler — pulls the X coordinate of the clicked
+  // point out of the chart state.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleChartClick = useCallback((state: any) => {
+    if (state && typeof state.activeLabel === "number") {
+      setSelectedTs(state.activeLabel);
+    }
+  }, []);
+
+  // Baseline = first valid ToF reading in the visible window. Used to
+  // convert raw distance into "rise from baseline" so dough rising
+  // shows as the line GOING UP, with the starting point at zero — the
+  // mental model the user works with at the bench.
+  const baselineMm = useMemo(() => {
+    for (const r of rows ?? []) {
+      if (typeof r.tof_median_mm === "number" && r.tof_median_mm > 0) {
+        return r.tof_median_mm;
+      }
+    }
+    return null;
+  }, [rows]);
+
+  // Pre-compute tof_rise_cm per row. Positive when dough has risen
+  // above baseline, negative when it's lower. cm because mm is too
+  // noisy for a kitchen-scale chart.
+  const chartData = useMemo(() => {
+    if (!rows) return [];
+    return rows.map((r) => ({
+      ...r,
+      tof_rise_cm:
+        baselineMm != null &&
+        typeof r.tof_median_mm === "number" &&
+        r.tof_median_mm > 0
+          ? (baselineMm - r.tof_median_mm) / 10
+          : null,
+    }));
+  }, [rows, baselineMm]);
 
   // Filter events to the visible window AND drop heartbeat / diag
   // noise so chart annotations stay readable.
@@ -175,7 +217,7 @@ export function SessionPlots({
       ) : (
         <>
           <ChartCard title="CO₂ (ppm)" height={200}>
-            <LineChart data={chartData}>
+            <LineChart data={chartData} syncId="session" onClick={handleChartClick}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey="ts_num"
@@ -184,12 +226,13 @@ export function SessionPlots({
                 tickFormatter={(v) => formatXAxisTick(v as number, sessionStartMs)}
                 tick={{ fontSize: 10 }}
               />
-              <YAxis tick={{ fontSize: 10 }} />
+              <YAxis domain={["dataMin", "dataMax"]} tick={{ fontSize: 10 }} />
               <Tooltip
                 labelFormatter={(v) => formatXAxisTick(v as number, sessionStartMs)}
               />
               <Line type="monotone" dataKey="co2_ppm" stroke="#f59e0b" dot={false} strokeWidth={2} />
               <EventLines events={events} />
+              <PinLine ts={selectedTs} />
               {suggestedMs && (
                 <ReferenceLine
                   x={suggestedMs}
@@ -202,7 +245,7 @@ export function SessionPlots({
           </ChartCard>
 
           <ChartCard title="Temperature (°C)" height={200}>
-            <LineChart data={chartData}>
+            <LineChart data={chartData} syncId="session" onClick={handleChartClick}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey="ts_num"
@@ -211,7 +254,7 @@ export function SessionPlots({
                 tickFormatter={(v) => formatXAxisTick(v as number, sessionStartMs)}
                 tick={{ fontSize: 10 }}
               />
-              <YAxis tick={{ fontSize: 10 }} />
+              <YAxis domain={["dataMin", "dataMax"]} tick={{ fontSize: 10 }} />
               <Tooltip
                 labelFormatter={(v) => formatXAxisTick(v as number, sessionStartMs)}
               />
@@ -219,6 +262,7 @@ export function SessionPlots({
               <Line type="monotone" dataKey="scd_temp_c" name="SCD41" stroke="#ef4444" dot={false} strokeWidth={2} />
               <Line type="monotone" dataKey="ds18b20_temp_c" name="DS18B20" stroke="#fb923c" dot={false} strokeWidth={1.5} strokeDasharray="4 2" />
               <EventLines events={events} />
+              <PinLine ts={selectedTs} />
               {suggestedMs && (
                 <ReferenceLine x={suggestedMs} stroke="#ef4444" strokeDasharray="4 4" />
               )}
@@ -226,11 +270,11 @@ export function SessionPlots({
           </ChartCard>
 
           <ChartCard
-            title="Distance (mm)"
-            subtitle="↓ lower = taller dough"
+            title="Rise (cm)"
+            subtitle="↑ taller dough · 0 = session start"
             height={200}
           >
-            <LineChart data={chartData}>
+            <LineChart data={chartData} syncId="session" onClick={handleChartClick}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey="ts_num"
@@ -239,12 +283,17 @@ export function SessionPlots({
                 tickFormatter={(v) => formatXAxisTick(v as number, sessionStartMs)}
                 tick={{ fontSize: 10 }}
               />
-              <YAxis tick={{ fontSize: 10 }} />
+              <YAxis domain={["dataMin", "dataMax"]} tick={{ fontSize: 10 }} />
               <Tooltip
                 labelFormatter={(v) => formatXAxisTick(v as number, sessionStartMs)}
+                formatter={(v) =>
+                  typeof v === "number" ? [`${v.toFixed(1)} cm`, "Rise"] : [v, "Rise"]
+                }
               />
-              <Line type="monotone" dataKey="tof_median_mm" stroke="#818cf8" dot={false} strokeWidth={2} />
+              <ReferenceLine y={0} stroke="hsl(var(--border))" strokeDasharray="2 2" />
+              <Line type="monotone" dataKey="tof_rise_cm" stroke="#818cf8" dot={false} strokeWidth={2} />
               <EventLines events={events} />
+              <PinLine ts={selectedTs} />
               {suggestedMs && (
                 <ReferenceLine x={suggestedMs} stroke="#ef4444" strokeDasharray="4 4" />
               )}
@@ -252,7 +301,7 @@ export function SessionPlots({
           </ChartCard>
 
           <ChartCard title="Humidity (%)" height={200}>
-            <LineChart data={chartData}>
+            <LineChart data={chartData} syncId="session" onClick={handleChartClick}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey="ts_num"
@@ -261,22 +310,40 @@ export function SessionPlots({
                 tickFormatter={(v) => formatXAxisTick(v as number, sessionStartMs)}
                 tick={{ fontSize: 10 }}
               />
-              <YAxis tick={{ fontSize: 10 }} />
+              <YAxis domain={["dataMin", "dataMax"]} tick={{ fontSize: 10 }} />
               <Tooltip
                 labelFormatter={(v) => formatXAxisTick(v as number, sessionStartMs)}
               />
               <Line type="monotone" dataKey="scd_humidity_pct" stroke="#38bdf8" dot={false} strokeWidth={2} />
               <EventLines events={events} />
+              <PinLine ts={selectedTs} />
               {suggestedMs && (
                 <ReferenceLine x={suggestedMs} stroke="#ef4444" strokeDasharray="4 4" />
               )}
             </LineChart>
           </ChartCard>
 
-          <ToFGridSection rows={chartData} />
+          <ToFGridSection
+            rows={chartData}
+            selectedTs={selectedTs}
+            onSelectTs={setSelectedTs}
+          />
         </>
       )}
     </div>
+  );
+}
+
+/** Vertical click-to-pin marker shared across all four charts. */
+function PinLine({ ts }: { ts: number | null }) {
+  if (ts == null) return null;
+  return (
+    <ReferenceLine
+      x={ts}
+      stroke="#0f172a"
+      strokeOpacity={0.5}
+      strokeWidth={1.5}
+    />
   );
 }
 
@@ -345,7 +412,15 @@ function ChartCard({
 // runs without any ToF data) don't pay for Three.js.
 import { ToFStdDevGrid } from "@/components/charts/ToFStdDevGrid";
 
-function ToFGridSection({ rows }: { rows: Array<{ measured_at: string; ts_num: number; tof_grid: number[] | null }> }) {
+function ToFGridSection({
+  rows,
+  selectedTs,
+  onSelectTs,
+}: {
+  rows: Array<{ measured_at: string; ts_num: number; tof_grid: number[] | null }>;
+  selectedTs: number | null;
+  onSelectTs: (ts: number | null) => void;
+}) {
   const [open, setOpen] = useState(false);
 
   const frames = useMemo(
@@ -376,7 +451,11 @@ function ToFGridSection({ rows }: { rows: Array<{ measured_at: string; ts_num: n
       </button>
       {open && (
         <div className="p-3 pt-0">
-          <ToFStdDevGrid frames={frames} />
+          <ToFStdDevGrid
+            frames={frames}
+            selectedTs={selectedTs}
+            onSelectTs={onSelectTs}
+          />
         </div>
       )}
     </div>
