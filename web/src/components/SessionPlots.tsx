@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useMeasurements } from "@/hooks/useMeasurements";
 import { useItemEvents, useSessionEvents } from "@/hooks/useItem";
+import { useSessionTofAnalysis } from "@/hooks/useSessionTofAnalysis";
 
 export interface SessionPlotsProps {
   stationId: number;
@@ -136,18 +137,18 @@ export function SessionPlots({
     }
   }, []);
 
-  // Baseline = first valid ToF reading in the visible window. Used to
-  // convert raw distance into "rise from baseline" so dough rising
-  // shows as the line GOING UP, with the starting point at zero — the
-  // mental model the user works with at the bench.
-  const baselineMm = useMemo(() => {
-    for (const r of rows ?? []) {
-      if (typeof r.tof_median_mm === "number" && r.tof_median_mm > 0) {
-        return r.tof_median_mm;
-      }
-    }
-    return null;
-  }, [rows]);
+  // Session-wide ToF analysis: fetches the FULL session (not just the
+  // visible window) to give us a stable baseline + per-pixel relevance
+  // scores. Pinning to session start means "Last 6h" mid-session shows
+  // a +30mm offset for a dough that already rose 30mm before the
+  // window started, instead of resetting to 0.
+  const tofAnalysis = useSessionTofAnalysis(stationId, startedAt, endedAt ?? null);
+  const baselineMm = tofAnalysis.data?.baselineMedianMm ?? null;
+  const baselineGrid = tofAnalysis.data?.baselineGrid ?? null;
+  const pixelScores = useMemo(
+    () => tofAnalysis.data?.pixelScores ?? new Array(64).fill(0),
+    [tofAnalysis.data?.pixelScores],
+  );
 
   // Pre-compute tof_rise_cm per row. Positive when dough has risen
   // above baseline, negative when it's lower. cm because mm is too
@@ -325,6 +326,8 @@ export function SessionPlots({
 
           <ToFGridSection
             rows={chartData}
+            baselineGrid={baselineGrid}
+            pixelScores={pixelScores}
             selectedTs={selectedTs}
             onSelectTs={setSelectedTs}
           />
@@ -414,10 +417,14 @@ import { ToFStdDevGrid } from "@/components/charts/ToFStdDevGrid";
 
 function ToFGridSection({
   rows,
+  baselineGrid,
+  pixelScores,
   selectedTs,
   onSelectTs,
 }: {
   rows: Array<{ measured_at: string; ts_num: number; tof_grid: number[] | null }>;
+  baselineGrid: number[] | null;
+  pixelScores: number[];
   selectedTs: number | null;
   onSelectTs: (ts: number | null) => void;
 }) {
@@ -450,9 +457,15 @@ function ToFGridSection({
         <span className="text-[10px]">{open ? "−" : "+"}</span>
       </button>
       {open && (
-        <div className="p-3 pt-0">
+        <div className="p-3 pt-0 space-y-2">
+          <p className="text-[10px] text-muted-foreground">
+            Baseline = first measurement of session start. Rise mode shows
+            growth from that anchor regardless of which time window is selected.
+          </p>
           <ToFStdDevGrid
             frames={frames}
+            baselineGrid={baselineGrid}
+            pixelScores={pixelScores}
             selectedTs={selectedTs}
             onSelectTs={onSelectTs}
           />

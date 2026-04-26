@@ -1,29 +1,25 @@
 /**
  * 8x8 ToF grid rendered as 3D bars.
  *
- * Default mode: "rise from baseline".
- *   - The first frame in the dataset is the baseline.
- *   - Bar HEIGHT = how much the dough has risen at that pixel since
- *     baseline (positive when dough rose; clamped to 0 when it sank).
- *     Tall bar = grew taller; flat bar = no movement / dropped.
- *   - At session start every bar sits at the floor — exactly as the
- *     user asked for ("starting point should be zero").
+ * Bar HEIGHT = "rise from baseline" by default — how much the dough
+ * has risen at that pixel since the FIRST measurement of the session
+ * (NOT the first visible frame). This stays correct even when the
+ * time selector is set to "Last 6h" mid-session: a pixel that has
+ * already risen 30mm before the visible window starts shows a bar
+ * 30mm tall throughout, instead of resetting to 0.
  *
- * Optional toggle flips into "absolute distance" mode: bar height
- * proportional to raw distance reading (taller bar = bigger distance =
- * sensor far from surface).
+ * Bar COLOR = the per-pixel A×B relevance score computed once
+ * across the whole session by useSessionTofAnalysis. Pixels likely
+ * tracking the dough surface glow orange; pixels stuck on the wall
+ * or jittery sit dark blue. Scores are passed in as props so the
+ * coloring is consistent between this widget and any future
+ * calibration tooling.
  *
- * Bar COLOR = std-dev of that pixel across ALL frames (computed once,
- * never updated by the scrubber). High std-dev → orange (likely the
- * dough surface that moves over time). Low std-dev → dark blue
- * (stable: wall or empty air).
+ * Toggle button flips into "Absolute distance" mode for raw mm
+ * heights when needed.
  *
- * Fixed isometric camera, no orbit.
- *
- * Props:
- *   selectedTs / onSelectTs synchronize the scrubber with the parent's
- *   click-pinned timestamp. Clicking a chart upstream sets selectedTs
- *   here; dragging the scrubber here calls onSelectTs upstream.
+ * Scrubber is bidirectionally synced with the parent via
+ * selectedTs / onSelectTs.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -31,27 +27,22 @@ import { Canvas } from "@react-three/fiber";
 import * as THREE from "three";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { pixelScoreColor } from "@/lib/tofAnalysis";
 
 const GRID = 8;
 const CELL_SIZE = 0.4;
 const GAP = 0.05;
 const MAX_HEIGHT = 4;
 
-const COLOR_LOW = new THREE.Color(0x1e3a5f);
-const COLOR_HIGH = new THREE.Color(0xf97316);
-
-/**
- * `heights` is per-pixel display height in [0, 1] (already normalized).
- * `stdDevs` colors are also per-pixel. Both arrays length 64.
- */
-function BarMesh({ heights, stdDevs, stdDevMax }: {
+function BarMesh({
+  heights,
+  pixelScores,
+}: {
   heights: number[];
-  stdDevs: number[];
-  stdDevMax: number;
+  pixelScores: number[];
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const obj = useMemo(() => new THREE.Object3D(), []);
-  const tmpColor = useMemo(() => new THREE.Color(), []);
 
   useEffect(() => {
     if (!meshRef.current) return;
@@ -68,16 +59,14 @@ function BarMesh({ heights, stdDevs, stdDevMax }: {
         obj.updateMatrix();
         meshRef.current.setMatrixAt(idx, obj.matrix);
 
-        const sd = stdDevs[idx] ?? 0;
-        const t = stdDevMax > 0 ? Math.min(1, sd / stdDevMax) : 0;
-        tmpColor.copy(COLOR_LOW).lerp(COLOR_HIGH, t);
-        colors.push(tmpColor.r, tmpColor.g, tmpColor.b);
+        const { r: cr, g: cg, b: cb } = pixelScoreColor(pixelScores[idx] ?? 0);
+        colors.push(cr, cg, cb);
       }
     }
     meshRef.current.instanceMatrix.needsUpdate = true;
     const colorAttr = new THREE.InstancedBufferAttribute(new Float32Array(colors), 3);
     meshRef.current.geometry.setAttribute("color", colorAttr);
-  }, [heights, stdDevs, stdDevMax, obj, tmpColor]);
+  }, [heights, pixelScores, obj]);
 
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, GRID * GRID]}>
@@ -88,31 +77,34 @@ function BarMesh({ heights, stdDevs, stdDevMax }: {
 }
 
 interface ToFStdDevGridProps {
-  /** Frames must already be filtered to those with a valid 64-length grid. */
+  /** Frames in the visible window — drive the scrubber and bar heights. */
   frames: Array<{ measured_at: string; ts_num: number; tof_grid: number[] }>;
+  /** First-measurement-of-session grid — anchor for the "rise" mode. */
+  baselineGrid: number[] | null;
+  /** Per-pixel relevance scores from the whole session, length 64. */
+  pixelScores: number[];
   /** Click-pinned timestamp from the parent — scrubber jumps to nearest frame. */
   selectedTs?: number | null;
-  /** Called when the user drags the scrubber so the parent can sync the
-   *  vertical line on its line charts. */
+  /** Called when the user drags the scrubber. */
   onSelectTs?: (ts: number | null) => void;
 }
 
 export function ToFStdDevGrid({
   frames,
+  baselineGrid,
+  pixelScores,
   selectedTs,
   onSelectTs,
 }: ToFStdDevGridProps) {
   const [frameIdx, setFrameIdx] = useState(0);
-  // Default to RISE mode — that's what the user asked for. Toggle off
-  // to fall back to absolute distance heights.
+  // Default: "Rise from session start". Toggle off → absolute distance.
   const [mode, setMode] = useState<"rise" | "absolute">("rise");
 
-  // Keep the slider valid if the underlying data shrinks.
   useEffect(() => {
     if (frameIdx >= frames.length) setFrameIdx(Math.max(0, frames.length - 1));
   }, [frames.length, frameIdx]);
 
-  // Sync to parent's selectedTs — find nearest frame.
+  // Sync scrubber to parent's pinned timestamp.
   useEffect(() => {
     if (selectedTs == null || frames.length === 0) return;
     let best = 0;
@@ -124,23 +116,7 @@ export function ToFStdDevGrid({
     setFrameIdx(best);
   }, [selectedTs, frames]);
 
-  // Per-pixel std-dev across the whole session (computed once).
-  const stdDevs = useMemo(() => {
-    return Array.from({ length: 64 }, (_, pixelIdx) => {
-      const values: number[] = [];
-      for (const f of frames) {
-        const v = f.tof_grid[pixelIdx];
-        if (typeof v === "number" && v > 0 && v < 4000) values.push(v);
-      }
-      if (values.length < 2) return 0;
-      const mean = values.reduce((a, b) => a + b, 0) / values.length;
-      const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
-      return Math.sqrt(variance);
-    });
-  }, [frames]);
-  const stdDevMax = useMemo(() => Math.max(...stdDevs, 1), [stdDevs]);
-
-  // Distance domain (mm) for absolute-mode height mapping. 2-98 percentile clip.
+  // Distance domain for absolute-mode height mapping. 2-98 percentile clip.
   const { vMin, vMax } = useMemo(() => {
     const all: number[] = [];
     for (const f of frames) {
@@ -156,18 +132,16 @@ export function ToFStdDevGrid({
     };
   }, [frames]);
 
-  // Baseline (first frame) for rise computation.
-  const baseline = frames[0]?.tof_grid;
-
-  // Maximum positive rise across the session — used to normalize bar
-  // heights so the tallest bar fills the canvas.
+  // Maximum positive rise across the whole visible series (relative to
+  // the SESSION baseline, not first visible frame) — used to normalize
+  // bar heights so the tallest rise fills the canvas.
   const riseMaxMm = useMemo(() => {
-    if (!baseline) return 1;
+    if (!baselineGrid) return 1;
     let m = 1;
     for (const f of frames) {
       for (let i = 0; i < 64; i++) {
         const cur = f.tof_grid[i];
-        const base = baseline[i];
+        const base = baselineGrid[i];
         if (
           typeof cur === "number" && cur > 0 &&
           typeof base === "number" && base > 0
@@ -178,11 +152,10 @@ export function ToFStdDevGrid({
       }
     }
     return m;
-  }, [frames, baseline]);
+  }, [frames, baselineGrid]);
 
   const currentFrame = frames[frameIdx] ?? frames[0];
 
-  // Per-pixel normalized [0,1] height for the current frame.
   const displayHeights = useMemo(() => {
     if (!currentFrame) return Array(64).fill(0);
     const grid = currentFrame.tof_grid;
@@ -191,7 +164,7 @@ export function ToFStdDevGrid({
       const cur = grid[i];
       const validCur = typeof cur === "number" && cur > 0 && cur < 4000;
       if (mode === "rise") {
-        const base = baseline?.[i];
+        const base = baselineGrid?.[i];
         const validBase = typeof base === "number" && base > 0;
         if (validCur && validBase) {
           const rise = (base as number) - cur;
@@ -200,7 +173,6 @@ export function ToFStdDevGrid({
           out.push(0);
         }
       } else {
-        // Absolute distance mode: taller bar = farther from sensor.
         if (validCur) {
           const v = Math.max(vMin, Math.min(vMax, cur));
           out.push((v - vMin) / Math.max(1, vMax - vMin));
@@ -210,9 +182,8 @@ export function ToFStdDevGrid({
       }
     }
     return out;
-  }, [currentFrame, baseline, mode, riseMaxMm, vMin, vMax]);
+  }, [currentFrame, baselineGrid, mode, riseMaxMm, vMin, vMax]);
 
-  // Stats for the label under the canvas.
   const stats = useMemo(() => {
     if (!currentFrame) return null;
     const grid = currentFrame.tof_grid;
@@ -220,14 +191,15 @@ export function ToFStdDevGrid({
     if (valid.length === 0) return null;
     const sorted = [...valid].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)];
-    if (mode === "rise" && baseline) {
-      const baseValid = baseline.filter((v) => typeof v === "number" && v > 0) as number[];
+    if (mode === "rise" && baselineGrid) {
+      const baseValid = baselineGrid.filter((v) => typeof v === "number" && v > 0) as number[];
+      if (baseValid.length === 0) return { distance_cm: (median / 10).toFixed(1) };
       const baseSorted = [...baseValid].sort((a, b) => a - b);
       const baseMedian = baseSorted[Math.floor(baseSorted.length / 2)];
       return { rise_cm: ((baseMedian - median) / 10).toFixed(1) };
     }
     return { distance_cm: (median / 10).toFixed(1) };
-  }, [currentFrame, mode, baseline]);
+  }, [currentFrame, mode, baselineGrid]);
 
   if (frames.length === 0) return null;
 
@@ -257,8 +229,7 @@ export function ToFStdDevGrid({
               <directionalLight position={[6, 10, 4]} intensity={0.9} />
               <BarMesh
                 heights={displayHeights}
-                stdDevs={stdDevs}
-                stdDevMax={stdDevMax}
+                pixelScores={pixelScores}
               />
             </Canvas>
           </div>
@@ -269,8 +240,6 @@ export function ToFStdDevGrid({
         <div className="text-center text-xs font-medium text-muted-foreground">Back</div>
       </div>
 
-      {/* Scrubber — bidirectionally synced with the click-pin on the
-          line charts above. */}
       <div className="flex items-center gap-2">
         <span className="w-12 text-right text-[10px] text-muted-foreground">
           {frameIdx + 1}/{frames.length}
@@ -295,10 +264,10 @@ export function ToFStdDevGrid({
           size="sm"
           onClick={() => setMode((m) => (m === "rise" ? "absolute" : "rise"))}
         >
-          {mode === "rise" ? "Rise from baseline" : "Absolute distance"}
+          {mode === "rise" ? "Rise from session start" : "Absolute distance"}
         </Button>
         <Label className="text-[10px] text-muted-foreground">
-          color: per-pixel std-dev (orange = changing, blue = stable)
+          color: pixel relevance score (orange = tracking dough, blue = wall/noise)
         </Label>
       </div>
     </div>

@@ -22,6 +22,7 @@ import {
 import { useLogEvent, useDeleteEvent, useRetireStarter, useEndSession } from "@/hooks/useMutations";
 import { StationStatusDot } from "@/components/StationStatus";
 import { TofHeatmap } from "@/components/TofHeatmap";
+import { SessionPlots } from "@/components/SessionPlots";
 import { useBakeState } from "@/hooks/useBakeState";
 import { formatElapsed, formatTime } from "@/lib/utils";
 import { Trash2, RefreshCw, Archive } from "lucide-react";
@@ -163,8 +164,19 @@ export function ItemDetailPage() {
               <Stat label="Weight" value={measurement?.load_cell_g} unit="g" />
             </CardContent>
           </Card>
+          {/* Inline time-series for at-a-glance fermentation tracking.
+              The 3D ToF section is collapsed by default since it's heavy
+              to render. The dedicated /plot page below stays available
+              for fullscreen viewing. */}
+          <SessionPlots
+            stationId={item.station_id}
+            startedAt={session?.started_at ?? item.created_at}
+            endedAt={session?.ended_at ?? null}
+            sessionId={session?.id}
+            itemId={item.id}
+          />
           <Link to={`/item/${item.short_id}/plot`} className="block">
-            <Button variant="outline" className="h-12 w-full">📈 View plots</Button>
+            <Button variant="outline" className="h-12 w-full">📈 Open plots fullscreen</Button>
           </Link>
         </>
       )}
