@@ -58,8 +58,9 @@ export function DashboardPage() {
                   {activeItems.map((item) => {
                     const station = item.station as { id: number; label: string } | null;
                     const session = (item as Record<string, unknown>).session as { started_at: string } | null;
-                    const batch = item.batch as { total_weight_g?: number } | null;
-                    const weight = batch?.total_weight_g;
+                    // Per-item weight (this jar / this dough), not the
+                    // batch-level sum across all siblings.
+                    const weight = item.weight_g;
                     return (
                       <tr
                         key={item.id}

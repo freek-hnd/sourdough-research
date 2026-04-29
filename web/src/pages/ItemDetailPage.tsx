@@ -60,10 +60,11 @@ export function ItemDetailPage() {
   const batch = item.batch as {
     root_starter?: { name: string } | null;
     parent_item_id?: string | null;
-    total_weight_g?: number;
   } | null;
   const starterName = batch?.root_starter?.name;
-  const batchWeight = batch?.total_weight_g;
+  // Show this item's own weight, not the sum across all siblings in
+  // the batch (those each have their own row to look at).
+  const itemWeight = item.weight_g;
   const isActiveStarter = item.type === "starter" && !item.retired_at;
 
   function fire(name: string) {
@@ -119,8 +120,8 @@ export function ItemDetailPage() {
         {starterName && (
           <p className="text-sm text-muted-foreground">{starterName}</p>
         )}
-        {batchWeight != null && (
-          <p className="text-sm text-muted-foreground">Batch weight: {Math.round(batchWeight)} g</p>
+        {itemWeight != null && (
+          <p className="text-sm text-muted-foreground">Weight: {Math.round(itemWeight)} g</p>
         )}
         {item.retired_at && (
           <p className="text-sm text-destructive">Retired</p>
