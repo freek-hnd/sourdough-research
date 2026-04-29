@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { useStations } from "@/hooks/useStations";
 import { useCreateBatch, type NewBatchInput } from "@/hooks/useMutations";
 import { StarterPicker } from "@/components/StarterPicker";
+import { ContainerInput } from "@/components/ContainerInput";
 import { Minus, Plus } from "lucide-react";
 import { formatElapsed, generateShortId } from "@/lib/utils";
 
@@ -35,17 +36,6 @@ interface Child {
   starter_g?: number;
   whole_flour_g?: number;
 }
-
-// Container suggestions shown in the typeahead datalist. Free text is
-// also accepted so the user can type "Mason 1L" or whatever they actually
-// have in the kitchen.
-const CONTAINER_SUGGESTIONS = [
-  "Jar (starter)",
-  "Jar (large)",
-  "Banneton",
-  "Bowl",
-  "Other",
-];
 
 // One storage slot per flow so you can have a dough in progress AND a
 // starter refresh in progress at the same time without one overwriting
@@ -319,11 +309,9 @@ export function BatchNewPage() {
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
                   <Label>Container</Label>
-                  <Input
-                    type="text"
-                    list="container-options"
+                  <ContainerInput
                     value={containerType}
-                    onChange={(e) => setContainerType(e.target.value)}
+                    onChange={setContainerType}
                     placeholder="Jar (starter)"
                   />
                 </div>
@@ -377,14 +365,14 @@ export function BatchNewPage() {
                       <span className="w-8 font-mono text-sm font-semibold">
                         {String.fromCharCode(65 + i)}
                       </span>
-                      <Input
-                        type="text"
-                        list="container-options"
-                        value={c.container_type ?? ""}
-                        onChange={(e) => updateChild({ container_type: e.target.value })}
-                        placeholder="Jar (starter)"
-                        className="flex-1"
-                      />
+                      <div className="flex-1">
+                        <ContainerInput
+                          value={c.container_type ?? ""}
+                          onChange={(v) => updateChild({ container_type: v })}
+                          placeholder="Jar (starter)"
+                          compact
+                        />
+                      </div>
                       <Select
                         value={c.station_id?.toString() ?? ""}
                         onValueChange={(v) =>
@@ -463,13 +451,6 @@ export function BatchNewPage() {
               })}
             </div>
           )}
-
-          {/* Datalist powering the typeahead Container input. */}
-          <datalist id="container-options">
-            {CONTAINER_SUGGESTIONS.map((opt) => (
-              <option key={opt} value={opt} />
-            ))}
-          </datalist>
 
           <Button
             className="h-12 w-full"
@@ -627,19 +608,12 @@ export function BatchNewPage() {
           </div>
           <div className="space-y-1">
             <Label>Container</Label>
-            <Input
-              type="text"
-              list="container-options"
+            <ContainerInput
               value={containerType}
-              onChange={(e) => setContainerType(e.target.value)}
+              onChange={setContainerType}
               placeholder="Default"
             />
           </div>
-          <datalist id="container-options">
-            {CONTAINER_SUGGESTIONS.map((opt) => (
-              <option key={opt} value={opt} />
-            ))}
-          </datalist>
           <Button
             className="h-12 w-full"
             disabled={!flour || !water}

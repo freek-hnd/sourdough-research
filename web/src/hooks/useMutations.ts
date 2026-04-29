@@ -103,30 +103,110 @@ export function useCreateBatch() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: NewBatchInput) => {
+      const { generateShortId } = await import("@/lib/utils");
+      const now = new Date();
+      const prefix = generateShortId(input.type, now, 0).slice(0, 6);
+      const { data: existing } = await supabase
+        .from("items")
+        .select("short_id")
+        .like("short_id", `${prefix}%`);
+      const offsetBase = existing?.length ?? 0;
+      const generation = (input.parent_generation ?? 0) + 1;
+
+      // -------------------------------------------------------------
+      // Starter refresh into 2+ jars: each jar is its OWN batch.
+      // All batches share root_starter_id, parent_item_id, mixed_at;
+      // each batch's flour_g/water_g/starter_g/whole_flour_g is just
+      // that one jar's recipe. No per-jar mathematics on a parent
+      // batch row, no synthetic 'sum' values.
+      // -------------------------------------------------------------
+      if (input.type === "starter" && input.children.length > 1) {
+        const insertedItems: Array<{ id: string; station_id: number | null }> = [];
+
+        for (let i = 0; i < input.children.length; i++) {
+          const c = input.children[i];
+          const jarFlour = c.flour_g ?? input.flour_g;
+          const jarWater = c.water_g ?? input.water_g;
+          const jarStarter = c.starter_g ?? (input.starter_g ?? 0);
+          const jarWhole = c.whole_flour_g ?? 0;
+          const jarTotal = jarFlour + jarWater + jarStarter + jarWhole;
+
+          const jarExtras: Record<string, unknown> = {};
+          if (input.extras_json != null) jarExtras.extra = input.extras_json;
+          if (jarWhole > 0) jarExtras.whole_flour_g = jarWhole;
+          const jarExtrasPayload =
+            Object.keys(jarExtras).length > 0 ? jarExtras : null;
+
+          const { data: jarBatch, error: bErr } = await supabase
+            .from("batches")
+            .insert({
+              type: "starter",
+              root_starter_id: input.root_starter_id,
+              parent_item_id: input.parent_item_id,
+              flour_g: jarFlour,
+              water_g: jarWater,
+              starter_g: jarStarter,
+              salt_g: null,
+              extras_json: jarExtrasPayload,
+              total_weight_g: jarTotal,
+              num_children: 1,
+              mixed_at: input.mixed_at,
+              notes: input.notes,
+            })
+            .select()
+            .single();
+          if (bErr) throw bErr;
+
+          const { data: jarItem, error: iErr } = await supabase
+            .from("items")
+            .insert({
+              batch_id: jarBatch.id,
+              type: "starter",
+              short_id: generateShortId("starter", now, offsetBase + i),
+              container_type: c.container_type,
+              weight_g: c.weight_g || jarTotal,
+              station_id: c.station_id,
+              inkbird_probe: c.inkbird_probe,
+              generation,
+            })
+            .select()
+            .single();
+          if (iErr) throw iErr;
+          insertedItems.push({ id: jarItem.id, station_id: jarItem.station_id });
+        }
+
+        const sessionsPayload = insertedItems
+          .filter((it) => it.station_id != null)
+          .map((it) => ({
+            id: crypto.randomUUID(),
+            item_id: it.id,
+            station_id: it.station_id!,
+            started_at: input.mixed_at,
+          }));
+        if (sessionsPayload.length > 0) {
+          const { error: sErr } = await supabase
+            .from("sessions")
+            .insert(sessionsPayload)
+            .select();
+          if (sErr) throw sErr;
+        }
+
+        return { items: insertedItems };
+      }
+
+      // -------------------------------------------------------------
+      // Dough OR single-jar starter: classic 1-batch-with-N-items
+      // shape. Dough is divided from a shared mixture so a single
+      // batch row with shared flour/water/starter is the correct model.
+      // -------------------------------------------------------------
       const wholeFlourG = input.whole_flour_g ?? 0;
       const total =
         input.flour_g + input.water_g + (input.starter_g ?? 0) +
         (input.salt_g ?? 0) + wholeFlourG;
 
-      // Stash whole flour + per-jar breakdown in extras_json since the
-      // schema doesn't have dedicated columns. Preserve any caller-
-      // supplied extras under an `extra` key so we don't lose them.
-      const hasPerJar = input.children.some(
-        (c) =>
-          c.flour_g != null || c.water_g != null ||
-          c.starter_g != null || c.whole_flour_g != null,
-      );
       const extras: Record<string, unknown> = {};
       if (input.extras_json != null) extras.extra = input.extras_json;
       if (wholeFlourG > 0) extras.whole_flour_g = wholeFlourG;
-      if (hasPerJar) {
-        extras.jars = input.children.map((c) => ({
-          flour_g: c.flour_g ?? null,
-          water_g: c.water_g ?? null,
-          starter_g: c.starter_g ?? null,
-          whole_flour_g: c.whole_flour_g ?? null,
-        }));
-      }
       const extrasPayload = Object.keys(extras).length > 0 ? extras : null;
 
       const { data: batch, error: bErr } = await supabase
@@ -149,19 +229,10 @@ export function useCreateBatch() {
         .single();
       if (bErr) throw bErr;
 
-      const now = new Date();
-      const { generateShortId } = await import("@/lib/utils");
-      const prefix = generateShortId(input.type, now, 0).slice(0, 6); // e.g. "D0412-"
-      const { data: existing } = await supabase
-        .from("items")
-        .select("short_id")
-        .like("short_id", `${prefix}%`);
-      const offset = existing?.length ?? 0;
-      const generation = (input.parent_generation ?? 0) + 1;
       const itemsPayload = input.children.map((c, i) => ({
         batch_id: batch.id,
         type: input.type,
-        short_id: generateShortId(input.type, now, offset + i),
+        short_id: generateShortId(input.type, now, offsetBase + i),
         container_type: c.container_type,
         weight_g: c.weight_g,
         station_id: c.station_id,
