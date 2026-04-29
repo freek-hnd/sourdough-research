@@ -10,6 +10,11 @@ export interface SessionTofAnalysis {
   pixelScores: number[];
   /** Number of frames considered (whole session). */
   frameCount: number;
+  /** All session frames with a valid 64-pixel grid, ordered by time.
+   *  Exposed so downstream components (e.g. first-frame selection) can
+   *  reach back to the very start of the session even when the user is
+   *  looking at a narrower visible window. */
+  sessionFrames: Array<{ measured_at: string; ts_num: number; tof_grid: number[] }>;
 }
 
 /**
@@ -79,19 +84,24 @@ export function useSessionTofAnalysis(
 
       // Score over the whole session — score is a property of the
       // pixel, not the visible window.
-      const scoredFrames = all
+      const sessionFrames = all
         .filter((r): r is typeof r & { tof_grid: number[] } =>
           Array.isArray(r.tof_grid) && r.tof_grid.length === 64,
         )
-        .map((r) => ({ ts_num: r.ts_num, tof_grid: r.tof_grid }));
+        .map((r) => ({
+          measured_at: r.measured_at,
+          ts_num: r.ts_num,
+          tof_grid: r.tof_grid,
+        }));
 
-      const pixelScores = computePixelScores(scoredFrames, eventTimestamps);
+      const pixelScores = computePixelScores(sessionFrames, eventTimestamps);
 
       return {
         baselineGrid,
         baselineMedianMm,
         pixelScores,
-        frameCount: scoredFrames.length,
+        frameCount: sessionFrames.length,
+        sessionFrames,
       };
     },
     staleTime: 5 * 60_000,

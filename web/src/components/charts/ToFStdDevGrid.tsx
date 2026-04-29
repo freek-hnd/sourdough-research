@@ -34,12 +34,19 @@ const CELL_SIZE = 0.4;
 const GAP = 0.05;
 const MAX_HEIGHT = 4;
 
+// Color used for the dimmed-out non-dough pixels when the "hide non-dough"
+// toggle is on. Almost-black so it doesn't compete with the actual data.
+const HIDDEN_COLOR = { r: 0x1a / 255, g: 0x1a / 255, b: 0x2e / 255 };
+
 function BarMesh({
   heights,
   pixelScores,
+  hiddenPixels,
 }: {
   heights: number[];
   pixelScores: number[];
+  /** Pixels to render flat + dim. Empty set = render everything. */
+  hiddenPixels: ReadonlySet<number>;
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const obj = useMemo(() => new THREE.Object3D(), []);
@@ -50,7 +57,10 @@ function BarMesh({
     for (let r = 0; r < GRID; r++) {
       for (let c = 0; c < GRID; c++) {
         const idx = r * GRID + c;
-        const norm = heights[idx] ?? 0;
+        const isHidden = hiddenPixels.has(idx);
+        // Hidden pixels get a flat near-zero bar so the Z scale stops
+        // being dominated by a bright wall reading at the edge.
+        const norm = isHidden ? 0 : (heights[idx] ?? 0);
         const h = Math.max(0.05, norm * MAX_HEIGHT);
         const x = (c - GRID / 2 + 0.5) * (CELL_SIZE + GAP);
         const z = (r - GRID / 2 + 0.5) * (CELL_SIZE + GAP);
@@ -59,14 +69,18 @@ function BarMesh({
         obj.updateMatrix();
         meshRef.current.setMatrixAt(idx, obj.matrix);
 
-        const { r: cr, g: cg, b: cb } = pixelScoreColor(pixelScores[idx] ?? 0);
-        colors.push(cr, cg, cb);
+        if (isHidden) {
+          colors.push(HIDDEN_COLOR.r, HIDDEN_COLOR.g, HIDDEN_COLOR.b);
+        } else {
+          const { r: cr, g: cg, b: cb } = pixelScoreColor(pixelScores[idx] ?? 0);
+          colors.push(cr, cg, cb);
+        }
       }
     }
     meshRef.current.instanceMatrix.needsUpdate = true;
     const colorAttr = new THREE.InstancedBufferAttribute(new Float32Array(colors), 3);
     meshRef.current.geometry.setAttribute("color", colorAttr);
-  }, [heights, pixelScores, obj]);
+  }, [heights, pixelScores, hiddenPixels, obj]);
 
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, GRID * GRID]}>
@@ -87,6 +101,9 @@ interface ToFStdDevGridProps {
   selectedTs?: number | null;
   /** Called when the user drags the scrubber. */
   onSelectTs?: (ts: number | null) => void;
+  /** When provided, the "Hide non-dough" toggle becomes active. Pixels NOT
+   *  in this set are shown flat + dim when the toggle is on. */
+  selectedPixels?: ReadonlySet<number>;
 }
 
 export function ToFStdDevGrid({
@@ -95,10 +112,25 @@ export function ToFStdDevGrid({
   pixelScores,
   selectedTs,
   onSelectTs,
+  selectedPixels,
 }: ToFStdDevGridProps) {
   const [frameIdx, setFrameIdx] = useState(0);
   // Default: "Rise from session start". Toggle off → absolute distance.
   const [mode, setMode] = useState<"rise" | "absolute">("rise");
+  const [hideNonDough, setHideNonDough] = useState(false);
+
+  // Build the hidden set: every pixel NOT in selectedPixels, when the
+  // toggle is on AND we have a meaningful selection. With no selection
+  // (size 0 or 64) the toggle is a no-op.
+  const hiddenPixels = useMemo<ReadonlySet<number>>(() => {
+    if (!hideNonDough || !selectedPixels) return new Set();
+    if (selectedPixels.size === 0 || selectedPixels.size >= 64) return new Set();
+    const hidden = new Set<number>();
+    for (let i = 0; i < 64; i++) {
+      if (!selectedPixels.has(i)) hidden.add(i);
+    }
+    return hidden;
+  }, [hideNonDough, selectedPixels]);
 
   useEffect(() => {
     if (frameIdx >= frames.length) setFrameIdx(Math.max(0, frames.length - 1));
@@ -230,6 +262,7 @@ export function ToFStdDevGrid({
               <BarMesh
                 heights={displayHeights}
                 pixelScores={pixelScores}
+                hiddenPixels={hiddenPixels}
               />
             </Canvas>
           </div>
@@ -258,14 +291,25 @@ export function ToFStdDevGrid({
         />
       </div>
 
-      <div className="flex items-center justify-between gap-2">
-        <Button
-          variant={mode === "rise" ? "default" : "outline"}
-          size="sm"
-          onClick={() => setMode((m) => (m === "rise" ? "absolute" : "rise"))}
-        >
-          {mode === "rise" ? "Rise from session start" : "Absolute distance"}
-        </Button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant={mode === "rise" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setMode((m) => (m === "rise" ? "absolute" : "rise"))}
+          >
+            {mode === "rise" ? "Rise from session start" : "Absolute distance"}
+          </Button>
+          {selectedPixels && selectedPixels.size > 0 && selectedPixels.size < 64 && (
+            <Button
+              variant={hideNonDough ? "default" : "outline"}
+              size="sm"
+              onClick={() => setHideNonDough((v) => !v)}
+            >
+              {hideNonDough ? "Showing dough only" : "Hide non-dough pixels"}
+            </Button>
+          )}
+        </div>
         <Label className="text-[10px] text-muted-foreground">
           color: pixel relevance score (orange = tracking dough, blue = wall/noise)
         </Label>

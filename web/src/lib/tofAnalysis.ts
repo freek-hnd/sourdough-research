@@ -264,3 +264,239 @@ export function pixelScoreColor(score: number): { r: number; g: number; b: numbe
     b: b0 + (b1 - b0) * t,
   };
 }
+
+/** Same gradient as pixelScoreColor but as a CSS rgb() string. */
+export function pixelScoreCss(score: number): string {
+  const { r, g, b } = pixelScoreColor(score);
+  return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+}
+
+// ===========================================================================
+// Dough pixel selection — three methods for picking which 8x8 pixels are
+// actually tracking the dough surface (vs. wall, rim, air, or noise).
+// ===========================================================================
+
+export interface PixelMeta {
+  index: number;
+  row: number;
+  col: number;
+  score: number;
+}
+
+/** Build PixelMeta[] from a length-64 array of pixel relevance scores. */
+export function buildPixelMetas(scores: ReadonlyArray<number>): PixelMeta[] {
+  return Array.from({ length: 64 }, (_, i) => ({
+    index: i,
+    row: Math.floor(i / 8),
+    col: i % 8,
+    score: scores[i] ?? 0,
+  }));
+}
+
+// --- Method 1 — first-frame flat surface -----------------------------------
+
+/**
+ * Fresh mixed dough is approximately flat. In the first few frames, pixels
+ * above the dough read approximately the same distance. Pixels that deviate
+ * more than `toleranceMm` from the median of those first frames are likely
+ * hitting walls / rim / air.
+ */
+export function firstFrameSelection(
+  pixels: ReadonlyArray<PixelMeta>,
+  frames: ReadonlyArray<{ tof_grid: number[] }>,
+  numFrames: number,
+  toleranceMm: number,
+): Set<number> {
+  const window = frames.slice(0, Math.max(1, numFrames));
+  if (window.length === 0) return new Set();
+
+  // Per-pixel mean over the first N frames (ignoring out-of-range readings).
+  const pixelMeans: (number | null)[] = pixels.map((p) => {
+    const vals: number[] = [];
+    for (const f of window) {
+      const v = f.tof_grid[p.index];
+      if (typeof v === "number" && v > 0 && v < 4000) vals.push(v);
+    }
+    if (vals.length === 0) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  });
+
+  // Robust median across pixel means (so the "expected dough surface"
+  // distance doesn't get pulled by a few wall pixels).
+  const valid = pixelMeans.filter((v): v is number => v != null);
+  if (valid.length === 0) return new Set();
+  const sorted = [...valid].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+
+  return new Set(
+    pixels
+      .filter((_, i) => {
+        const m = pixelMeans[i];
+        return m != null && Math.abs(m - median) <= toleranceMm;
+      })
+      .map((p) => p.index),
+  );
+}
+
+// --- Method 2 — relevance score threshold + connectivity --------------------
+
+/**
+ * Threshold by A×B relevance score. Optionally drop isolated high-scoring
+ * pixels that don't have enough selected 4-neighbors (one pass, not iterative).
+ */
+export function scoreThresholdSelection(
+  pixels: ReadonlyArray<PixelMeta>,
+  threshold: number,
+  minNeighbors: number,
+): Set<number> {
+  const initial = new Set(
+    pixels.filter((p) => p.score >= threshold).map((p) => p.index),
+  );
+
+  if (minNeighbors <= 0) return initial;
+
+  const filtered = new Set<number>();
+  for (const idx of initial) {
+    const row = Math.floor(idx / 8);
+    const col = idx % 8;
+    const candidates = [
+      row > 0 ? (row - 1) * 8 + col : -1,
+      row < 7 ? (row + 1) * 8 + col : -1,
+      col > 0 ? row * 8 + (col - 1) : -1,
+      col < 7 ? row * 8 + (col + 1) : -1,
+    ];
+    let count = 0;
+    for (const n of candidates) {
+      if (n >= 0 && initial.has(n)) count++;
+    }
+    if (count >= minNeighbors) filtered.add(idx);
+  }
+  return filtered;
+}
+
+// --- Method 3 — RANSAC circle fit -------------------------------------------
+
+interface Circle {
+  cx: number;
+  cy: number;
+  r: number;
+}
+
+/** Standard 3-point circle fit. Null if collinear. */
+export function fitCircleThrough3Points(
+  p1: readonly [number, number],
+  p2: readonly [number, number],
+  p3: readonly [number, number],
+): Circle | null {
+  const [ax, ay] = p1;
+  const [bx, by] = p2;
+  const [cx, cy] = p3;
+  const D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+  if (Math.abs(D) < 1e-6) return null;
+  const ux =
+    ((ax * ax + ay * ay) * (by - cy) +
+      (bx * bx + by * by) * (cy - ay) +
+      (cx * cx + cy * cy) * (ay - by)) /
+    D;
+  const uy =
+    ((ax * ax + ay * ay) * (cx - bx) +
+      (bx * bx + by * by) * (ax - cx) +
+      (cx * cx + cy * cy) * (bx - ax)) /
+    D;
+  const r = Math.sqrt((ax - ux) * (ax - ux) + (ay - uy) * (ay - uy));
+  return { cx: ux, cy: uy, r };
+}
+
+/**
+ * Fit a circle through high-scoring pixels (RANSAC), then select all pixels
+ * inside the fitted circle. Returns the fitted circle alongside so the UI
+ * can draw it as an overlay.
+ *
+ * Note: pixel coordinates use (row, col), so the returned circle's `cy` is
+ * the row coord and `cx` is the column coord. Render order matters in the
+ * minimap.
+ */
+export function ransacCircleSelection(
+  pixels: ReadonlyArray<PixelMeta>,
+  scoreThreshold: number,
+  inlierTolerance: number,
+  iterations: number,
+  minInliers: number,
+): { selected: Set<number>; circle: Circle | null } {
+  const candidates = pixels.filter((p) => p.score >= scoreThreshold);
+  if (candidates.length < 3) return { selected: new Set(), circle: null };
+
+  let bestInlierCount = 0;
+  let bestCircle: Circle | null = null;
+
+  for (let i = 0; i < iterations; i++) {
+    // Pick three distinct candidates randomly.
+    const a = candidates[Math.floor(Math.random() * candidates.length)];
+    const b = candidates[Math.floor(Math.random() * candidates.length)];
+    const c = candidates[Math.floor(Math.random() * candidates.length)];
+    if (a.index === b.index || a.index === c.index || b.index === c.index) continue;
+
+    const circle = fitCircleThrough3Points(
+      [a.row, a.col],
+      [b.row, b.col],
+      [c.row, c.col],
+    );
+    if (!circle) continue;
+    // Reject degenerate circles that don't fit on an 8x8 grid sensibly.
+    if (circle.r < 0.5 || circle.r > 8) continue;
+
+    let count = 0;
+    for (const p of candidates) {
+      const d = Math.sqrt(
+        (p.row - circle.cy) ** 2 + (p.col - circle.cx) ** 2,
+      );
+      if (Math.abs(d - circle.r) <= inlierTolerance) count++;
+    }
+    if (count > bestInlierCount && count >= minInliers) {
+      bestInlierCount = count;
+      bestCircle = circle;
+    }
+  }
+
+  if (!bestCircle) return { selected: new Set(), circle: null };
+
+  // Select EVERY pixel inside the circle (not just candidates) so the
+  // dough mask includes pixels whose score happens to be low — what
+  // matters once we've located the dough region geometrically.
+  const c = bestCircle;
+  const selected = new Set(
+    pixels
+      .filter((p) => {
+        const d = Math.sqrt((p.row - c.cy) ** 2 + (p.col - c.cx) ** 2);
+        return d <= c.r + inlierTolerance;
+      })
+      .map((p) => p.index),
+  );
+
+  return { selected, circle: bestCircle };
+}
+
+// --- Median dough signal helper --------------------------------------------
+
+/**
+ * For a given set of selected pixel indices and a series of frames,
+ * return per-frame median distance across the selected pixels.
+ * Output is aligned with the input frames; null where every selected
+ * pixel was invalid at that timestep.
+ */
+export function medianOverPixels(
+  frames: ReadonlyArray<{ tof_grid: number[] }>,
+  selected: ReadonlySet<number>,
+): (number | null)[] {
+  if (selected.size === 0) return frames.map(() => null);
+  return frames.map((f) => {
+    const vals: number[] = [];
+    for (const idx of selected) {
+      const v = f.tof_grid[idx];
+      if (typeof v === "number" && v > 0 && v < 4000) vals.push(v);
+    }
+    if (vals.length === 0) return null;
+    const sorted = [...vals].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+  });
+}

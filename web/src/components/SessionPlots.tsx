@@ -328,6 +328,7 @@ export function SessionPlots({
             rows={chartData}
             baselineGrid={baselineGrid}
             pixelScores={pixelScores}
+            sessionFrames={tofAnalysis.data?.sessionFrames ?? []}
             selectedTs={selectedTs}
             onSelectTs={setSelectedTs}
           />
@@ -414,21 +415,31 @@ function ChartCard({
 // Lazy-import the std-dev grid here so callers that don't need it (or
 // runs without any ToF data) don't pay for Three.js.
 import { ToFStdDevGrid } from "@/components/charts/ToFStdDevGrid";
+import {
+  DoughPixelSelection,
+  type DoughSelectionState,
+} from "@/components/charts/DoughPixelSelection";
 
 function ToFGridSection({
   rows,
   baselineGrid,
   pixelScores,
+  sessionFrames,
   selectedTs,
   onSelectTs,
 }: {
   rows: Array<{ measured_at: string; ts_num: number; tof_grid: number[] | null }>;
   baselineGrid: number[] | null;
   pixelScores: number[];
+  sessionFrames: Array<{ measured_at: string; ts_num: number; tof_grid: number[] }>;
   selectedTs: number | null;
   onSelectTs: (ts: number | null) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Mask produced by DoughPixelSelection — drives the "hide non-dough"
+  // toggle on the 3D bar chart. Empty set = nothing selected (toggle no-op).
+  const [doughSelection, setDoughSelection] = useState<DoughSelectionState | null>(null);
 
   const frames = useMemo(
     () =>
@@ -447,30 +458,62 @@ function ToFGridSection({
   if (frames.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-border bg-card">
-      <button
-        type="button"
-        className="flex w-full items-center justify-between p-3 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <span>ToF grid ({frames.length} frames)</span>
-        <span className="text-[10px]">{open ? "−" : "+"}</span>
-      </button>
-      {open && (
-        <div className="p-3 pt-0 space-y-2">
-          <p className="text-[10px] text-muted-foreground">
-            Baseline = first measurement of session start. Rise mode shows
-            growth from that anchor regardless of which time window is selected.
-          </p>
-          <ToFStdDevGrid
+    <div className="space-y-3">
+      <div className="rounded-lg border border-border bg-card">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between p-3 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground"
+          onClick={() => setOpen((o) => !o)}
+        >
+          <span>ToF grid ({frames.length} frames)</span>
+          <span className="text-[10px]">{open ? "−" : "+"}</span>
+        </button>
+        {open && (
+          <div className="p-3 pt-0 space-y-2">
+            <p className="text-[10px] text-muted-foreground">
+              Baseline = first measurement of session start. Rise mode shows
+              growth from that anchor regardless of which time window is selected.
+            </p>
+            <ToFStdDevGrid
+              frames={frames}
+              baselineGrid={baselineGrid}
+              pixelScores={pixelScores}
+              selectedTs={selectedTs}
+              onSelectTs={onSelectTs}
+              selectedPixels={doughSelection?.selected}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Dough pixel selection — separate collapsible card so it stays
+          out of sight unless the user wants to do calibration work. */}
+      <div className="rounded-lg border border-border bg-card">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between p-3 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground"
+          onClick={() => setPickerOpen((o) => !o)}
+        >
+          <span>
+            Dough pixel selection
+            {doughSelection && doughSelection.selected.size > 0 && (
+              <span className="ml-2 font-normal normal-case text-muted-foreground">
+                ({doughSelection.selected.size}/64 selected)
+              </span>
+            )}
+          </span>
+          <span className="text-[10px]">{pickerOpen ? "−" : "+"}</span>
+        </button>
+        {pickerOpen && (
+          <DoughPixelSelection
             frames={frames}
-            baselineGrid={baselineGrid}
+            sessionFrames={sessionFrames}
             pixelScores={pixelScores}
-            selectedTs={selectedTs}
-            onSelectTs={onSelectTs}
+            baselineGrid={baselineGrid}
+            onSelectionChange={setDoughSelection}
           />
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
