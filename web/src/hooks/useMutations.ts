@@ -77,6 +77,9 @@ export interface NewBatchInput {
   water_g: number;
   starter_g: number | null;
   salt_g: number | null;
+  /** Whole-grain / volkoren flour. Stored in batches.extras_json since
+   *  the schema doesn't have a dedicated column yet. */
+  whole_flour_g?: number | null;
   extras_json: unknown;
   mixed_at: string;
   notes: string | null;
@@ -85,6 +88,14 @@ export interface NewBatchInput {
     container_type: string;
     station_id: number | null;
     inkbird_probe: number | null;
+    /** Per-jar ingredient amounts. Used by the multi-jar starter
+     *  refresh flow where each new jar can have its own recipe. When
+     *  set, batch.flour_g/water_g/starter_g is the SUM across jars and
+     *  the per-jar breakdown is preserved in extras_json.jars. */
+    flour_g?: number;
+    water_g?: number;
+    starter_g?: number;
+    whole_flour_g?: number;
   }>;
 }
 
@@ -92,8 +103,32 @@ export function useCreateBatch() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: NewBatchInput) => {
+      const wholeFlourG = input.whole_flour_g ?? 0;
       const total =
-        input.flour_g + input.water_g + (input.starter_g ?? 0) + (input.salt_g ?? 0);
+        input.flour_g + input.water_g + (input.starter_g ?? 0) +
+        (input.salt_g ?? 0) + wholeFlourG;
+
+      // Stash whole flour + per-jar breakdown in extras_json since the
+      // schema doesn't have dedicated columns. Preserve any caller-
+      // supplied extras under an `extra` key so we don't lose them.
+      const hasPerJar = input.children.some(
+        (c) =>
+          c.flour_g != null || c.water_g != null ||
+          c.starter_g != null || c.whole_flour_g != null,
+      );
+      const extras: Record<string, unknown> = {};
+      if (input.extras_json != null) extras.extra = input.extras_json;
+      if (wholeFlourG > 0) extras.whole_flour_g = wholeFlourG;
+      if (hasPerJar) {
+        extras.jars = input.children.map((c) => ({
+          flour_g: c.flour_g ?? null,
+          water_g: c.water_g ?? null,
+          starter_g: c.starter_g ?? null,
+          whole_flour_g: c.whole_flour_g ?? null,
+        }));
+      }
+      const extrasPayload = Object.keys(extras).length > 0 ? extras : null;
+
       const { data: batch, error: bErr } = await supabase
         .from("batches")
         .insert({
@@ -104,7 +139,7 @@ export function useCreateBatch() {
           water_g: input.water_g,
           starter_g: input.starter_g,
           salt_g: input.salt_g,
-          extras_json: input.extras_json,
+          extras_json: extrasPayload,
           total_weight_g: total,
           num_children: input.children.length,
           mixed_at: input.mixed_at,

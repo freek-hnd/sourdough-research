@@ -15,7 +15,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { useStations } from "@/hooks/useStations";
-import { useCreateBatch } from "@/hooks/useMutations";
+import { useCreateBatch, type NewBatchInput } from "@/hooks/useMutations";
 import { StarterPicker } from "@/components/StarterPicker";
 import { Minus, Plus } from "lucide-react";
 import { formatElapsed, generateShortId } from "@/lib/utils";
@@ -28,7 +28,24 @@ interface Child {
   container_type: string;
   station_id: number | null;
   inkbird_probe: number | null;
+  // Per-jar ingredient amounts for the multi-jar starter flow. Stored
+  // as numbers; "" / unset means the user hasn't filled this field.
+  flour_g?: number;
+  water_g?: number;
+  starter_g?: number;
+  whole_flour_g?: number;
 }
+
+// Container suggestions shown in the typeahead datalist. Free text is
+// also accepted so the user can type "Mason 1L" or whatever they actually
+// have in the kitchen.
+const CONTAINER_SUGGESTIONS = [
+  "Jar (starter)",
+  "Jar (large)",
+  "Banneton",
+  "Bowl",
+  "Other",
+];
 
 // One storage slot per flow so you can have a dough in progress AND a
 // starter refresh in progress at the same time without one overwriting
@@ -48,6 +65,7 @@ interface WizardState {
   parentLabel: string;
   flour: string;
   water: string;
+  wholeFlour: string;
   starterG: string;
   salt: string;
   extras: string;
@@ -122,6 +140,7 @@ export function BatchNewPage() {
   const [parentLabel, setParentLabel] = useState(initial?.parentLabel ?? "");
   const [flour, setFlour] = useState(initial?.flour ?? "");
   const [water, setWater] = useState(initial?.water ?? "");
+  const [wholeFlour, setWholeFlour] = useState(initial?.wholeFlour ?? "");
   const [starterG, setStarterG] = useState(initial?.starterG ?? "");
   const [salt, setSalt] = useState(initial?.salt ?? "");
   const [extras, setExtras] = useState(initial?.extras ?? "");
@@ -148,6 +167,7 @@ export function BatchNewPage() {
     setParentLabel(s?.parentLabel ?? "");
     setFlour(s?.flour ?? "");
     setWater(s?.water ?? "");
+    setWholeFlour(s?.wholeFlour ?? "");
     setStarterG(s?.starterG ?? "");
     setSalt(s?.salt ?? "");
     setExtras(s?.extras ?? "");
@@ -171,12 +191,12 @@ export function BatchNewPage() {
     if (mode === "choose") return;
     const state: WizardState = {
       mode, step, rootStarterId, parentItemId, parentGeneration, parentLabel,
-      flour, water, starterG, salt, extras, containerType, mixedAt,
+      flour, water, wholeFlour, starterG, salt, extras, containerType, mixedAt,
       numChildren, children, stationId, notes,
     };
     localStorage.setItem(STORAGE_KEYS[mode], JSON.stringify(state));
   }, [mode, step, rootStarterId, parentItemId, parentGeneration, parentLabel,
-      flour, water, starterG, salt, extras, containerType, mixedAt,
+      flour, water, wholeFlour, starterG, salt, extras, containerType, mixedAt,
       numChildren, children, stationId, notes]);
 
   const reset = useCallback(() => {
@@ -189,6 +209,7 @@ export function BatchNewPage() {
     setParentLabel("");
     setFlour("");
     setWater("");
+    setWholeFlour("");
     setStarterG("");
     setSalt("");
     setExtras("");
@@ -270,11 +291,8 @@ export function BatchNewPage() {
             <h1 className="text-lg font-semibold">Feed starter</h1>
             <Badge variant="outline">From: {parentLabel}</Badge>
           </div>
-          <div className="grid grid-cols-3 gap-2">
-            <div className="space-y-1"><Label>Flour (g)</Label><Input inputMode="numeric" value={flour} onChange={(e) => setFlour(e.target.value)} /></div>
-            <div className="space-y-1"><Label>Water (g)</Label><Input inputMode="numeric" value={water} onChange={(e) => setWater(e.target.value)} /></div>
-            <div className="space-y-1"><Label>Starter (g)</Label><Input inputMode="numeric" value={starterG} onChange={(e) => setStarterG(e.target.value)} /></div>
-          </div>
+
+          {/* Number of jars first — choosing >1 unlocks per-jar inputs below. */}
           <div>
             <Label>Number of jars</Label>
             <div className="mt-2 flex gap-2">
@@ -288,41 +306,33 @@ export function BatchNewPage() {
               ))}
             </div>
           </div>
-          {starterNumChildren > 1 && (
-            <div className="space-y-2">
-              {Array.from({ length: starterNumChildren }, (_, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <span className="w-8 font-mono">{String.fromCharCode(65 + i)}</span>
-                  <Select
-                    value={children[i]?.container_type ?? "jar-starter"}
-                    onValueChange={(v) => {
-                      const next = [...children];
-                      next[i] = { ...next[i], weight_g: next[i]?.weight_g ?? 0, container_type: v ?? "jar-starter", station_id: next[i]?.station_id ?? null, inkbird_probe: null };
-                      setChildren(next);
-                    }}
-                  >
-                    <SelectTrigger className="flex-1">
-                      <SelectValue>
-                        {(children[i]?.container_type ?? "jar-starter") === "jar-starter" ? "Jar (starter)" : (children[i]?.container_type ?? "jar-starter") === "jar-large" ? "Jar (large)" : "Other"}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="jar-starter">Jar (starter)</SelectItem>
-                      <SelectItem value="jar-large">Jar (large)</SelectItem>
-                      <SelectItem value="other">Other</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select
-                    value={children[i]?.station_id?.toString() ?? ""}
-                    onValueChange={(v) => {
-                      const next = [...children];
-                      next[i] = { ...next[i], weight_g: next[i]?.weight_g ?? 0, container_type: next[i]?.container_type ?? "jar-starter", station_id: v ? Number(v) : null, inkbird_probe: null };
-                      setChildren(next);
-                    }}
-                  >
-                    <SelectTrigger className="flex-1">
-                      <SelectValue placeholder="Station">
-                        {children[i]?.station_id ? `#${children[i].station_id}` : "No station"}
+
+          {starterNumChildren === 1 && (
+            <>
+              {/* Single jar: shared ingredient row, order: water → flour → whole flour → starter */}
+              <div className="grid grid-cols-4 gap-2">
+                <div className="space-y-1"><Label>Water (g)</Label><Input inputMode="numeric" value={water} onChange={(e) => setWater(e.target.value)} /></div>
+                <div className="space-y-1"><Label>Flour (g)</Label><Input inputMode="numeric" value={flour} onChange={(e) => setFlour(e.target.value)} /></div>
+                <div className="space-y-1"><Label>Whole (g)</Label><Input inputMode="numeric" value={wholeFlour} onChange={(e) => setWholeFlour(e.target.value)} placeholder="0" /></div>
+                <div className="space-y-1"><Label>Starter (g)</Label><Input inputMode="numeric" value={starterG} onChange={(e) => setStarterG(e.target.value)} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label>Container</Label>
+                  <Input
+                    type="text"
+                    list="container-options"
+                    value={containerType}
+                    onChange={(e) => setContainerType(e.target.value)}
+                    placeholder="Jar (starter)"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Station</Label>
+                  <Select value={stationId?.toString() ?? ""} onValueChange={(v) => setStationId(v ? Number(v) : null)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="No station">
+                        {stationId ? `#${stationId} ${stations.find((s) => s.id === stationId)?.label ?? ""}` : "No station"}
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
@@ -332,66 +342,213 @@ export function BatchNewPage() {
                     </SelectContent>
                   </Select>
                 </div>
-              ))}
+              </div>
+            </>
+          )}
+
+          {starterNumChildren > 1 && (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Each jar can have its own recipe. Order: water → flour → whole → starter.
+              </p>
+              {Array.from({ length: starterNumChildren }, (_, i) => {
+                const c = children[i] ?? {} as Partial<Child>;
+                const updateChild = (patch: Partial<Child>) => {
+                  const next = [...children];
+                  // Spread defaults first, then existing values, then the
+                  // patch — ordered so explicit values always win.
+                  const existing: Partial<Child> = next[i] ?? {};
+                  next[i] = {
+                    weight_g: existing.weight_g ?? 0,
+                    container_type: existing.container_type ?? "Jar (starter)",
+                    station_id: existing.station_id ?? null,
+                    inkbird_probe: existing.inkbird_probe ?? null,
+                    ...existing,
+                    ...patch,
+                  };
+                  setChildren(next);
+                };
+                return (
+                  <div
+                    key={i}
+                    className="space-y-2 rounded-lg border border-border bg-card p-3"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="w-8 font-mono text-sm font-semibold">
+                        {String.fromCharCode(65 + i)}
+                      </span>
+                      <Input
+                        type="text"
+                        list="container-options"
+                        value={c.container_type ?? ""}
+                        onChange={(e) => updateChild({ container_type: e.target.value })}
+                        placeholder="Jar (starter)"
+                        className="flex-1"
+                      />
+                      <Select
+                        value={c.station_id?.toString() ?? ""}
+                        onValueChange={(v) =>
+                          updateChild({ station_id: v ? Number(v) : null })
+                        }
+                      >
+                        <SelectTrigger className="w-[140px]">
+                          <SelectValue placeholder="No station">
+                            {c.station_id
+                              ? `#${c.station_id}`
+                              : "No station"}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {stations.map((s) => (
+                            <SelectItem key={s.id} value={s.id.toString()}>
+                              #{s.id} {s.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Water</Label>
+                        <Input
+                          inputMode="numeric"
+                          value={c.water_g ?? ""}
+                          onChange={(e) =>
+                            updateChild({
+                              water_g: e.target.value === "" ? undefined : Number(e.target.value),
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Flour</Label>
+                        <Input
+                          inputMode="numeric"
+                          value={c.flour_g ?? ""}
+                          onChange={(e) =>
+                            updateChild({
+                              flour_g: e.target.value === "" ? undefined : Number(e.target.value),
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Whole</Label>
+                        <Input
+                          inputMode="numeric"
+                          value={c.whole_flour_g ?? ""}
+                          onChange={(e) =>
+                            updateChild({
+                              whole_flour_g: e.target.value === "" ? undefined : Number(e.target.value),
+                            })
+                          }
+                          placeholder="0"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Starter</Label>
+                        <Input
+                          inputMode="numeric"
+                          value={c.starter_g ?? ""}
+                          onChange={(e) =>
+                            updateChild({
+                              starter_g: e.target.value === "" ? undefined : Number(e.target.value),
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
-          {starterNumChildren === 1 && (
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <Label>Container</Label>
-                <Select value={containerType} onValueChange={(v) => setContainerType(v ?? "jar-starter")}>
-                  <SelectTrigger>
-                    <SelectValue>
-                      {containerType === "jar-starter" ? "Jar (starter)" : containerType === "jar-large" ? "Jar (large)" : containerType === "other" ? "Other" : containerType}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="jar-starter">Jar (starter)</SelectItem>
-                    <SelectItem value="jar-large">Jar (large)</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label>Station</Label>
-                <Select value={stationId?.toString() ?? ""} onValueChange={(v) => setStationId(v ? Number(v) : null)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="No station">
-                      {stationId ? `#${stationId} ${stations.find((s) => s.id === stationId)?.label ?? ""}` : "No station"}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {stations.map((s) => (
-                      <SelectItem key={s.id} value={s.id.toString()}>#{s.id} {s.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          )}
+
+          {/* Datalist powering the typeahead Container input. */}
+          <datalist id="container-options">
+            {CONTAINER_SUGGESTIONS.map((opt) => (
+              <option key={opt} value={opt} />
+            ))}
+          </datalist>
+
           <Button
             className="h-12 w-full"
-            disabled={!flour || !water || !starterG || createBatch.isPending}
+            disabled={(() => {
+              if (createBatch.isPending) return true;
+              if (starterNumChildren === 1) {
+                return !water || !flour || !starterG;
+              }
+              // Multi-jar: every jar must have water, flour, and starter.
+              for (let i = 0; i < starterNumChildren; i++) {
+                const c = children[i];
+                if (!c || c.water_g == null || c.flour_g == null || c.starter_g == null) return true;
+              }
+              return false;
+            })()}
             onClick={async () => {
               const now = new Date().toISOString();
-              const totalG = Number(flour) + Number(water) + Number(starterG);
-              const childrenPayload = starterNumChildren === 1
-                ? [{ weight_g: totalG, container_type: containerType, station_id: stationId, inkbird_probe: null }]
-                : Array.from({ length: starterNumChildren }, (_, i) => ({
-                    weight_g: Math.round(totalG / starterNumChildren),
-                    container_type: children[i]?.container_type ?? "jar-starter",
-                    station_id: children[i]?.station_id ?? null,
+              let childrenPayload: NewBatchInput["children"];
+              let batchFlour: number;
+              let batchWater: number;
+              let batchStarter: number;
+              let batchWholeFlour: number;
+
+              if (starterNumChildren === 1) {
+                const w = Number(water) || 0;
+                const f = Number(flour) || 0;
+                const wf = Number(wholeFlour) || 0;
+                const s = Number(starterG) || 0;
+                const total = w + f + wf + s;
+                childrenPayload = [{
+                  weight_g: total,
+                  container_type: containerType || "Jar (starter)",
+                  station_id: stationId,
+                  inkbird_probe: null,
+                  water_g: w,
+                  flour_g: f,
+                  whole_flour_g: wf,
+                  starter_g: s,
+                }];
+                batchWater = w;
+                batchFlour = f;
+                batchWholeFlour = wf;
+                batchStarter = s;
+              } else {
+                // Per-jar: each jar's weight is the sum of its own ingredients.
+                childrenPayload = Array.from({ length: starterNumChildren }, (_, i) => {
+                  const c = children[i];
+                  const w = c?.water_g ?? 0;
+                  const f = c?.flour_g ?? 0;
+                  const wf = c?.whole_flour_g ?? 0;
+                  const s = c?.starter_g ?? 0;
+                  return {
+                    weight_g: w + f + wf + s,
+                    container_type: c?.container_type || "Jar (starter)",
+                    station_id: c?.station_id ?? null,
                     inkbird_probe: null,
-                  }));
+                    water_g: w,
+                    flour_g: f,
+                    whole_flour_g: wf,
+                    starter_g: s,
+                  };
+                });
+                // Batch-level totals are sums across jars.
+                batchWater = childrenPayload.reduce((a, c) => a + (c.water_g ?? 0), 0);
+                batchFlour = childrenPayload.reduce((a, c) => a + (c.flour_g ?? 0), 0);
+                batchWholeFlour = childrenPayload.reduce((a, c) => a + (c.whole_flour_g ?? 0), 0);
+                batchStarter = childrenPayload.reduce((a, c) => a + (c.starter_g ?? 0), 0);
+              }
+
               try {
                 await createBatch.mutateAsync({
                   type: "starter",
                   root_starter_id: rootStarterId,
                   parent_item_id: parentItemId,
                   parent_generation: parentGeneration,
-                  flour_g: Number(flour),
-                  water_g: Number(water),
-                  starter_g: Number(starterG),
+                  flour_g: batchFlour,
+                  water_g: batchWater,
+                  starter_g: batchStarter,
+                  whole_flour_g: batchWholeFlour > 0 ? batchWholeFlour : null,
                   salt_g: null,
                   extras_json: null,
                   mixed_at: now,
@@ -423,7 +580,8 @@ export function BatchNewPage() {
   const waterN = Number(water) || 0;
   const starterN = Number(starterG) || 0;
   const saltN = Number(salt) || 0;
-  const totalG = flourN + waterN + starterN + saltN;
+  const wholeFlourN = Number(wholeFlour) || 0;
+  const totalG = flourN + waterN + wholeFlourN + starterN + saltN;
 
   function ensureChildren(n: number): Child[] {
     const equal = Math.round(totalG / n);
@@ -460,25 +618,28 @@ export function BatchNewPage() {
       {step === 2 && (
         <>
           <Badge variant="outline">Starter: {parentLabel}</Badge>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="space-y-1"><Label>Flour (g)</Label><Input inputMode="numeric" value={flour} onChange={(e) => setFlour(e.target.value)} /></div>
+          {/* Order: water → flour → whole flour. Whole flour is optional;
+              empty defaults to 0 in the totals. */}
+          <div className="grid grid-cols-3 gap-2">
             <div className="space-y-1"><Label>Water (g)</Label><Input inputMode="numeric" value={water} onChange={(e) => setWater(e.target.value)} /></div>
+            <div className="space-y-1"><Label>Flour (g)</Label><Input inputMode="numeric" value={flour} onChange={(e) => setFlour(e.target.value)} /></div>
+            <div className="space-y-1"><Label>Whole (g)</Label><Input inputMode="numeric" value={wholeFlour} onChange={(e) => setWholeFlour(e.target.value)} placeholder="0" /></div>
           </div>
           <div className="space-y-1">
             <Label>Container</Label>
-            <Select value={containerType} onValueChange={(v) => setContainerType(v ?? "default")}>
-              <SelectTrigger>
-                <SelectValue>
-                  {containerType === "banneton" ? "Banneton" : containerType === "bowl" ? "Bowl" : "Default"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="default">Default</SelectItem>
-                <SelectItem value="banneton">Banneton</SelectItem>
-                <SelectItem value="bowl">Bowl</SelectItem>
-              </SelectContent>
-            </Select>
+            <Input
+              type="text"
+              list="container-options"
+              value={containerType}
+              onChange={(e) => setContainerType(e.target.value)}
+              placeholder="Default"
+            />
           </div>
+          <datalist id="container-options">
+            {CONTAINER_SUGGESTIONS.map((opt) => (
+              <option key={opt} value={opt} />
+            ))}
+          </datalist>
           <Button
             className="h-12 w-full"
             disabled={!flour || !water}
@@ -651,6 +812,7 @@ export function BatchNewPage() {
                   water_g: waterN,
                   starter_g: starterN,
                   salt_g: saltN,
+                  whole_flour_g: wholeFlourN > 0 ? wholeFlourN : null,
                   extras_json: extras ? { note: extras } : null,
                   mixed_at: mixedAt || new Date().toISOString(),
                   notes: notes || null,
