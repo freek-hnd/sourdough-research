@@ -250,7 +250,8 @@ export function ToFStdDevGrid({
       </div>
 
       <div className="space-y-1">
-        <div className="text-center text-xs font-medium text-muted-foreground">Front</div>
+        {/* row 0 = physical BACK → renders along the top edge */}
+        <div className="text-center text-xs font-medium text-muted-foreground">Back</div>
         <div className="flex items-center gap-2">
           <div className="text-xs font-medium text-muted-foreground [writing-mode:vertical-rl] rotate-180">
             Left
@@ -270,7 +271,8 @@ export function ToFStdDevGrid({
             Right
           </div>
         </div>
-        <div className="text-center text-xs font-medium text-muted-foreground">Back</div>
+        {/* row 7 = physical FRONT (operator side) → bottom edge */}
+        <div className="text-center text-xs font-medium text-muted-foreground">Front</div>
       </div>
 
       <div className="flex items-center gap-2">

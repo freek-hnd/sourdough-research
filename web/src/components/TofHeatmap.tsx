@@ -3,8 +3,14 @@
  *
  * Color scale: low distance (close = dough surface) → warm (amber/orange),
  * high distance (far = beaker wall/air) → cool (blue).
- * Sides labeled Front/Back/Left/Right so the user knows which way to
- * nudge the beaker when readings are biased toward one edge.
+ *
+ * Orientation (verified by calibration):
+ *   - row 0 = physical BACK of the setup → rendered at the top
+ *   - row 7 = physical FRONT (operator side) → rendered at the bottom
+ *   - col 0 = LEFT, col 7 = RIGHT
+ * The data path firmware → MQTT → Pi SQLite → Supabase preserves
+ * row-major order, so what we render top-down is back→front and the
+ * labels say so.
  */
 
 interface TofHeatmapProps {
@@ -37,8 +43,8 @@ export function TofHeatmap({ grid, median, min, max }: TofHeatmapProps) {
 
   return (
     <div className="space-y-2">
-      {/* Top label */}
-      <div className="text-center text-xs font-medium text-muted-foreground">Front</div>
+      {/* Top label = row 0 = physical BACK */}
+      <div className="text-center text-xs font-medium text-muted-foreground">Back</div>
 
       <div className="flex items-center gap-2">
         {/* Left label */}
@@ -66,8 +72,8 @@ export function TofHeatmap({ grid, median, min, max }: TofHeatmapProps) {
         </div>
       </div>
 
-      {/* Bottom label */}
-      <div className="text-center text-xs font-medium text-muted-foreground">Back</div>
+      {/* Bottom label = row 7 = physical FRONT (operator side) */}
+      <div className="text-center text-xs font-medium text-muted-foreground">Front</div>
 
       {/* Stats */}
       <div className="flex justify-around text-sm">

@@ -427,7 +427,8 @@ function Minimap({
         className="w-full max-w-[220px]"
         aria-label="ToF dough mask minimap"
       >
-        {/* Side labels */}
+        {/* Side labels — row 0 = physical BACK rendered at top,
+            row 7 = physical FRONT (operator side) at bottom. */}
         <text
           x={TOTAL / 2}
           y={PAD - 4}
@@ -436,7 +437,7 @@ function Minimap({
           fill="currentColor"
           className="text-muted-foreground"
         >
-          Front
+          Back
         </text>
         <text
           x={TOTAL / 2}
@@ -446,7 +447,7 @@ function Minimap({
           fill="currentColor"
           className="text-muted-foreground"
         >
-          Back
+          Front
         </text>
         <text
           x={4}
