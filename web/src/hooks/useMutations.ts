@@ -354,6 +354,89 @@ export function useEndBake() {
   });
 }
 
+/**
+ * Assign or change the station for an existing item without resetting
+ * the session's started_at. Three cases:
+ *
+ *   1. Item had no station, now adding one
+ *      → update items.station_id; create a session with started_at =
+ *        item.created_at so any retro-active monitoring still measures
+ *        from the moment the dough was actually mixed.
+ *
+ *   2. Item already had a station, switching to a different one
+ *      → update items.station_id; on the active session row, update
+ *        station_id but keep started_at. Continuity preserved.
+ *
+ *   3. Item had a station, removing it (station_id = null)
+ *      → update items.station_id to null; end the active session
+ *        (set ended_at = now). The historical session row remains
+ *        intact for analysis.
+ */
+export function useAssignStation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      item_id: string;
+      station_id: number | null;
+      /** When no session exists yet, this becomes its started_at. Use
+       *  item.created_at (or batch.mixed_at) so the timeline doesn't
+       *  jump forward to the moment the user clicked the button. */
+      started_at: string;
+    }) => {
+      const { error: itemErr } = await supabase
+        .from("items")
+        .update({ station_id: input.station_id })
+        .eq("id", input.item_id);
+      if (itemErr) throw itemErr;
+
+      const { data: existing } = await supabase
+        .from("sessions")
+        .select("id, station_id")
+        .eq("item_id", input.item_id)
+        .is("ended_at", null)
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        if (input.station_id == null) {
+          // Removing station — close the session, leave the row.
+          const { error } = await supabase
+            .from("sessions")
+            .update({ ended_at: new Date().toISOString() })
+            .eq("id", existing.id);
+          if (error) throw error;
+        } else if (existing.station_id !== input.station_id) {
+          // Switch station, keep started_at.
+          const { error } = await supabase
+            .from("sessions")
+            .update({ station_id: input.station_id })
+            .eq("id", existing.id);
+          if (error) throw error;
+        }
+        // Same station_id as before → no-op.
+      } else if (input.station_id != null) {
+        // No active session yet — backdate started_at to the item's
+        // creation so the new session covers the whole life so far.
+        const { error } = await supabase
+          .from("sessions")
+          .insert({
+            id: crypto.randomUUID(),
+            item_id: input.item_id,
+            station_id: input.station_id,
+            started_at: input.started_at,
+          })
+          .select();
+        if (error) throw error;
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["items"] });
+      qc.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+}
+
 export function useRetireStarter() {
   const qc = useQueryClient();
   return useMutation({

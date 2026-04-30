@@ -19,7 +19,21 @@ import {
   useItemEvents,
   useLatestMeasurement,
 } from "@/hooks/useItem";
-import { useLogEvent, useDeleteEvent, useRetireStarter, useEndSession } from "@/hooks/useMutations";
+import { useLogEvent, useDeleteEvent, useRetireStarter, useEndSession, useAssignStation } from "@/hooks/useMutations";
+import { useStations } from "@/hooks/useStations";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { StationStatusDot } from "@/components/StationStatus";
 import { TofHeatmap } from "@/components/TofHeatmap";
 import { SessionPlots } from "@/components/SessionPlots";
@@ -50,7 +64,11 @@ export function ItemDetailPage() {
   const deleteEvent = useDeleteEvent();
   const retireStarter = useRetireStarter();
   const endSession = useEndSession();
+  const assignStation = useAssignStation();
   const { data: bakeInfo } = useBakeState(item?.id);
+  const { data: stations = [] } = useStations();
+  const [stationDialogOpen, setStationDialogOpen] = useState(false);
+  const [pendingStationId, setPendingStationId] = useState<number | null>(null);
   const [note, setNote] = useState("");
   const [sheetOpen, setSheetOpen] = useState(false);
   const undoTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -101,6 +119,37 @@ export function ItemDetailPage() {
     });
   }
 
+  function openStationDialog() {
+    if (!item) return;
+    setPendingStationId(item.station_id ?? null);
+    setStationDialogOpen(true);
+  }
+
+  function confirmAssignStation() {
+    if (!item) return;
+    assignStation.mutate(
+      {
+        item_id: item.id,
+        station_id: pendingStationId,
+        // Use the item's creation timestamp as the session start so a
+        // late-assigned station retroactively covers the time since
+        // the dough/starter was actually mixed.
+        started_at: item.created_at,
+      },
+      {
+        onSuccess: () => {
+          toast.success(
+            pendingStationId == null
+              ? "Station removed"
+              : `Assigned to station ${pendingStationId}`,
+          );
+          setStationDialogOpen(false);
+        },
+        onError: (err) => toast.error((err as Error).message),
+      },
+    );
+  }
+
   return (
     <div className="space-y-4 p-4">
       <div>
@@ -110,10 +159,15 @@ export function ItemDetailPage() {
             <Badge variant="secondary">{item.type}</Badge>
             {item.generation > 0 && <Badge variant="outline">Gen {item.generation}</Badge>}
             {item.station_id && (
-              <span className="inline-flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={openStationDialog}
+                className="inline-flex items-center gap-1.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                title="Change station"
+              >
                 <StationStatusDot stationId={item.station_id} />
                 <Badge>Station {item.station_id}</Badge>
-              </span>
+              </button>
             )}
           </div>
         </div>
@@ -153,6 +207,19 @@ export function ItemDetailPage() {
             <Archive className="size-4" />
           </Button>
         </div>
+      )}
+
+      {/* Late-assign a station when one was forgotten at refresh time.
+          Clicking the badge above does the same thing for items that
+          already have a station. */}
+      {!item.station_id && !item.retired_at && (
+        <Button
+          variant="outline"
+          className="h-12 w-full"
+          onClick={openStationDialog}
+        >
+          🛰 Assign station
+        </Button>
       )}
 
       {item.station_id && (
@@ -404,6 +471,63 @@ export function ItemDetailPage() {
         </Link>
       )}
       <Button variant="ghost" className="w-full" onClick={() => nav("/")}>Back</Button>
+
+      {/* Station assignment dialog. Triggered both from the badge and
+          the 'Assign station' button when no station is set. */}
+      <Dialog open={stationDialogOpen} onOpenChange={setStationDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {item.station_id ? "Change station" : "Assign station"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              The session start time stays the same — the station change is
+              applied retroactively to the existing session.
+            </p>
+            <Select
+              value={pendingStationId?.toString() ?? "__none__"}
+              onValueChange={(v) =>
+                setPendingStationId(
+                  v === "__none__" || v == null ? null : Number(v),
+                )
+              }
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="No station">
+                  {pendingStationId == null
+                    ? "No station"
+                    : `#${pendingStationId} ${stations.find((s) => s.id === pendingStationId)?.label ?? ""}`}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">No station (remove)</SelectItem>
+                {stations.map((s) => (
+                  <SelectItem key={s.id} value={s.id.toString()}>
+                    #{s.id} {s.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex gap-2">
+              <Button
+                variant="ghost"
+                className="flex-1"
+                onClick={() => setStationDialogOpen(false)}
+              >Cancel</Button>
+              <Button
+                className="flex-1"
+                disabled={
+                  assignStation.isPending ||
+                  (pendingStationId ?? null) === (item.station_id ?? null)
+                }
+                onClick={confirmAssignStation}
+              >Save</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
