@@ -437,6 +437,27 @@ export function useAssignStation() {
   });
 }
 
+/** Reverse useRetireStarter — clears retired_at so the starter shows
+ *  up again in active lists, the StarterPicker, and lineage trees as
+ *  a refreshable parent. Useful when the wrong jar was retired by
+ *  accident. */
+export function useUnretireStarter() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (itemId: string) => {
+      const { error } = await supabase
+        .from("items")
+        .update({ retired_at: null })
+        .eq("id", itemId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["items"] });
+      qc.invalidateQueries({ queryKey: ["starter_lineage"] });
+    },
+  });
+}
+
 export function useRetireStarter() {
   const qc = useQueryClient();
   return useMutation({

@@ -19,7 +19,7 @@ import {
   useItemEvents,
   useLatestMeasurement,
 } from "@/hooks/useItem";
-import { useLogEvent, useDeleteEvent, useRetireStarter, useEndSession, useAssignStation } from "@/hooks/useMutations";
+import { useLogEvent, useDeleteEvent, useRetireStarter, useUnretireStarter, useEndSession, useAssignStation } from "@/hooks/useMutations";
 import { useStations } from "@/hooks/useStations";
 import {
   Dialog,
@@ -63,6 +63,7 @@ export function ItemDetailPage() {
   const logEvent = useLogEvent();
   const deleteEvent = useDeleteEvent();
   const retireStarter = useRetireStarter();
+  const unretireStarter = useUnretireStarter();
   const endSession = useEndSession();
   const assignStation = useAssignStation();
   const { data: bakeInfo } = useBakeState(item?.id);
@@ -178,7 +179,24 @@ export function ItemDetailPage() {
           <p className="text-sm text-muted-foreground">Weight: {Math.round(itemWeight)} g</p>
         )}
         {item.retired_at && (
-          <p className="text-sm text-destructive">Retired</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm text-destructive">Retired</p>
+            {item.type === "starter" && (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={unretireStarter.isPending}
+                onClick={() => {
+                  unretireStarter.mutate(item.id, {
+                    onSuccess: () => toast.success("Starter restored"),
+                    onError: (err) => toast.error((err as Error).message),
+                  });
+                }}
+              >
+                Restore
+              </Button>
+            )}
+          </div>
         )}
         {session && (
           <p className="text-sm text-muted-foreground">Running for {formatElapsed(session.started_at)}</p>
