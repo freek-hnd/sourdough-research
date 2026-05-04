@@ -168,9 +168,19 @@ export function suggestedEnd(s: SessionWithItem): { at: string; reason: EndReaso
   }
   if (s.last_measurement_at) {
     const lastMs = new Date(s.last_measurement_at).getTime();
-    const ageMs = Date.now() - lastMs;
-    if (ageMs > 2 * 3600 * 1000) {
-      return { at: new Date(lastMs + 2 * 3600 * 1000).toISOString(), reason: "stale" };
+    const startMs = new Date(s.started_at).getTime();
+    // last_measurement_at is the most recent reading on the station
+    // SYSTEM-WIDE, not bounded by the session. If the station was idle
+    // for hours BEFORE this session began (typical right after a fresh
+    // refresh), that pre-session reading would otherwise mark a brand-
+    // new session as 'stale'. Skip the check entirely when the latest
+    // reading predates the session — the session simply hasn't had
+    // time to publish its first measurement yet.
+    if (lastMs >= startMs) {
+      const ageMs = Date.now() - lastMs;
+      if (ageMs > 2 * 3600 * 1000) {
+        return { at: new Date(lastMs + 2 * 3600 * 1000).toISOString(), reason: "stale" };
+      }
     }
   }
   const startedMs = new Date(s.started_at).getTime();
