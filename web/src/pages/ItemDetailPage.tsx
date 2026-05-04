@@ -18,6 +18,7 @@ import {
   useItem,
   useItemEvents,
   useLatestMeasurement,
+  useLatestSessionForItem,
 } from "@/hooks/useItem";
 import { useLogEvent, useDeleteEvent, useRetireStarter, useUnretireStarter, useEndSession, useAssignStation } from "@/hooks/useMutations";
 import { useStations } from "@/hooks/useStations";
@@ -58,6 +59,10 @@ export function ItemDetailPage() {
   const nav = useNavigate();
   const { data: item, isLoading } = useItem(shortId);
   const { data: session } = useActiveSessionForItem(item?.id);
+  // Latest session, ended OR active — drives the SessionPlots time
+  // window so plots correctly stop at session end and don't bleed
+  // into the next jar's measurements on the same station.
+  const { data: latestSession } = useLatestSessionForItem(item?.id);
   const { data: measurement } = useLatestMeasurement(item?.station_id);
   const { data: events } = useItemEvents(item?.id);
   const logEvent = useLogEvent();
@@ -256,9 +261,9 @@ export function ItemDetailPage() {
               for fullscreen viewing. */}
           <SessionPlots
             stationId={item.station_id}
-            startedAt={session?.started_at ?? item.created_at}
-            endedAt={session?.ended_at ?? null}
-            sessionId={session?.id}
+            startedAt={latestSession?.started_at ?? item.created_at}
+            endedAt={latestSession?.ended_at ?? null}
+            sessionId={latestSession?.id}
             itemId={item.id}
           />
           <Link to={`/item/${item.short_id}/plot`} className="block">

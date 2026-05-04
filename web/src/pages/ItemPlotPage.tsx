@@ -2,22 +2,23 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useItem, useActiveSessionForItem } from "@/hooks/useItem";
+import { useItem, useLatestSessionForItem } from "@/hooks/useItem";
 import { SessionPlots } from "@/components/SessionPlots";
 
 /**
  * Per-item plot view. Reuses the unified SessionPlots component so
  * the time-series UI is identical to /sessions and /stations/:id.
  *
- * The item's most recent active session anchors "Since session start".
- * If there's no station/session at all, we degrade gracefully with a
- * note instead of trying to plot empty data.
+ * Time window comes from the item's LATEST session (active or ended)
+ * — using ended_at as the upper bound is essential, otherwise once
+ * the session has ended the plot would keep pulling in the next
+ * jar's measurements from the same station.
  */
 export function ItemPlotPage() {
   const { shortId } = useParams<{ shortId: string }>();
   const nav = useNavigate();
   const { data: item, isLoading } = useItem(shortId);
-  const { data: session } = useActiveSessionForItem(item?.id);
+  const { data: session } = useLatestSessionForItem(item?.id);
 
   if (isLoading || !item) {
     return <div className="p-4"><Skeleton className="h-32 w-full" /></div>;
