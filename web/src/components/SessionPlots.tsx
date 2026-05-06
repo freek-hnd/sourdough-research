@@ -24,8 +24,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useMeasurements } from "@/hooks/useMeasurements";
-import { useItemEvents, useSessionEvents } from "@/hooks/useItem";
+import {
+  useItemEvents,
+  useSessionEvents,
+  useSession,
+  useStation,
+} from "@/hooks/useItem";
+import { useJar } from "@/hooks/useJars";
 import { useSessionTofAnalysis } from "@/hooks/useSessionTofAnalysis";
+import { VolumeOverTime } from "@/components/charts/VolumeOverTime";
 
 export interface SessionPlotsProps {
   stationId: number;
@@ -113,6 +120,11 @@ export function SessionPlots({
   }, [range, startedAt, endedAt]);
 
   const { data: rows, isLoading } = useMeasurements(stationId, from, to);
+  // Calibration triple — only needed by the VolumeOverTime chart, but
+  // they're cheap and cached so always fetch when sessionId is given.
+  const { data: stationRow } = useStation(stationId);
+  const { data: sessionRow } = useSession(sessionId);
+  const { data: jarRow } = useJar(sessionRow?.jar_id ?? null);
   // Events: prefer querying by session_id (cheaper, exact). Fall back
   // to item-scoped events if only itemId is given. Both hooks short-
   // circuit when their argument is undefined, so this is safe.
@@ -332,6 +344,19 @@ export function SessionPlots({
             selectedTs={selectedTs}
             onSelectTs={setSelectedTs}
           />
+
+          {/* Volume-over-time chart. Renders a friendly "missing X" hint
+              when the station / jar / session calibration triple isn't
+              complete; otherwise plots ml at render time from the raw
+              tof_grid. */}
+          {sessionId && (
+            <VolumeOverTime
+              measurements={chartData}
+              station={stationRow ?? null}
+              jar={jarRow ?? null}
+              session={sessionRow ?? null}
+            />
+          )}
         </>
       )}
     </div>

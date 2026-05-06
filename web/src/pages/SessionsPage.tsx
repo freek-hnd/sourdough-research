@@ -17,6 +17,7 @@ import {
   type SessionWithItem,
 } from "@/hooks/useSessions";
 import { SessionPlots } from "@/components/SessionPlots";
+import { SessionSetupCard } from "@/components/SessionSetupCard";
 import { formatElapsed } from "@/lib/utils";
 
 function formatLocal(iso: string): string {
@@ -155,13 +156,16 @@ export function SessionsPage() {
         const s = complete.data.find((x) => x.id === completeSelected);
         if (!s) return null;
         return (
-          <SessionPlots
-            stationId={s.station_id}
-            startedAt={s.started_at}
-            endedAt={s.ended_at}
-            sessionId={s.id}
-            itemId={s.item_id}
-          />
+          <>
+            <SessionSetupCard sessionId={s.id} />
+            <SessionPlots
+              stationId={s.station_id}
+              startedAt={s.started_at}
+              endedAt={s.ended_at}
+              sessionId={s.id}
+              itemId={s.item_id}
+            />
+          </>
         );
       })()}
     </div>
@@ -229,6 +233,8 @@ function OpenSessionDetail({
           </CardContent>
         </Card>
       )}
+
+      <SessionSetupCard sessionId={session.id} />
 
       <SessionPlots
         stationId={session.station_id}

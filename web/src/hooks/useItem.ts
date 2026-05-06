@@ -37,6 +37,42 @@ export function useActiveSessionForItem(itemId: string | undefined) {
   });
 }
 
+/** Single station by id — includes calibration columns from migration 003. */
+export function useStation(stationId: number | null | undefined) {
+  return useQuery({
+    queryKey: ["station", stationId],
+    enabled: stationId != null,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("stations")
+        .select("*")
+        .eq("id", stationId!)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** Single session by id — includes calibration setup columns. */
+export function useSession(sessionId: string | null | undefined) {
+  return useQuery({
+    queryKey: ["session", sessionId],
+    enabled: !!sessionId,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sessions")
+        .select("*")
+        .eq("id", sessionId!)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+    staleTime: 30_000,
+  });
+}
+
 /**
  * Latest session for an item — active OR already ended. Used to drive
  * the time window of SessionPlots so the plot stops at the real

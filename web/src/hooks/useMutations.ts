@@ -437,6 +437,39 @@ export function useAssignStation() {
   });
 }
 
+/**
+ * Update a session's calibration setup: which jar, how high above the
+ * station's reference plane, and which subset of pixels participates
+ * in volume calculation. All fields optional — pass null to clear.
+ */
+export function useUpdateSessionSetup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      session_id: string;
+      jar_id?: string | null;
+      setup_height_mm?: number | null;
+      pixel_subset?: "6x6_inner" | "4x4_center" | "8x8_all" | "manual";
+      manual_pixel_mask?: number[] | null;
+    }) => {
+      const patch: Record<string, unknown> = {};
+      if (input.jar_id !== undefined)            patch.jar_id            = input.jar_id;
+      if (input.setup_height_mm !== undefined)   patch.setup_height_mm   = input.setup_height_mm;
+      if (input.pixel_subset !== undefined)      patch.pixel_subset      = input.pixel_subset;
+      if (input.manual_pixel_mask !== undefined) patch.manual_pixel_mask = input.manual_pixel_mask;
+      const { error } = await supabase
+        .from("sessions")
+        .update(patch)
+        .eq("id", input.session_id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["sessions"] });
+      qc.invalidateQueries({ queryKey: ["items"] });
+    },
+  });
+}
+
 /** Reverse useRetireStarter — clears retired_at so the starter shows
  *  up again in active lists, the StarterPicker, and lineage trees as
  *  a refreshable parent. Useful when the wrong jar was retired by

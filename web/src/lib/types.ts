@@ -19,7 +19,26 @@ export interface Station {
   mac_address: string | null;
   ip_address: string | null;
   notes: string | null;
+  // Calibration (added in migration 003). All optional — pre-calibration
+  // stations leave these null and the volume chart simply doesn't render.
+  wall_pixel_mask: number[] | null;
+  pixel_slope: number[] | null;
+  pixel_intercept: number[] | null;
+  baseline_grid: number[] | null;
+  baseline_height_mm: number | null;
+  calibration_notes: string | null;
 }
+
+export interface Jar {
+  id: UUID;
+  name: string;
+  type: string | null;
+  cross_section_area_cm2: number | null;
+  calibration_notes: string | null;
+  created_at: ISODate;
+}
+
+export type PixelSubset = "6x6_inner" | "4x4_center" | "8x8_all" | "manual";
 
 export interface Batch {
   id: UUID;
@@ -76,6 +95,11 @@ export interface Session {
   started_at: ISODate;
   ended_at: ISODate | null;
   notes: string | null;
+  // Calibration setup (added in migration 003).
+  jar_id: UUID | null;
+  setup_height_mm: number | null;
+  pixel_subset: PixelSubset | null;
+  manual_pixel_mask: number[] | null;
 }
 
 export interface Measurement {
